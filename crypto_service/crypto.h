@@ -1,0 +1,17 @@
+#pragma once
+#include "master_key_generator/masterkey.h"
+#include <exception>
+#include <iostream>
+#include <sodium.h>
+#include <string>
+#include <vector>
+
+#define KEY_LEN crypto_box_SEEDBYTES
+
+class CryptoService {
+public:
+  static std::string cypher(const std::string &password, Nonce &nonce, Key key);
+
+  static std::string decypher(const std::string &password, Nonce &nonce,
+                              Key key);
+};

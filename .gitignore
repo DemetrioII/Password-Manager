@@ -1,0 +1,16 @@
+bazel-*
+aquery.json
+aquery.txt
+compile_commands.json
+cpp.txt
+generate_compile_commands.sh
+generate_json.py
+own.txt
+salt.bin
+vault.bin
+test
+MODULE.bazel.lock
+.bazelrc
+.bazeliskrc
+.bazelversion
+external/

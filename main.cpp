@@ -9,21 +9,15 @@ int main() {
   std::cin >> master_password;
   key = *MasterKeyManager::deriveKey(master_password, salt);
   Vault vault;
-  vault.lock(key);
+  vault.set_key(key);
   PasswordEntry entry;
   entry.id = "0";
   std::cin >> entry.login >> entry.password;
   Nonce nonce = NonceManager::generate();
-  entry.nonce =
-      std::string(reinterpret_cast<const char *>(nonce.data()), nonce.size());
+  entry.nonce = nonce;
   entry.title = entry.notes = "";
   vault.Add(entry);
-  Serializator serializator;
-  serializator.serialize(".vault.bin", vault);
-  serializator.deserialize(".vault.bin", vault);
-  for (auto entry : vault.Entries()) {
-    std::cout << entry.id << std::endl;
-    std::cout << entry.password << std::endl;
-  }
+  Serializator::serialize("vault.bin", vault);
+  Serializator::deserialize("vault.bin", vault);
   return 0;
 }

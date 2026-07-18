@@ -7,5 +7,6 @@ cc_test(
 	],
 	copts = [
 		"-std=c++23",
+		"-g",
 	],
 )

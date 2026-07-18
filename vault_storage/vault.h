@@ -1,6 +1,7 @@
 #pragma once
 #include "crypto_service/crypto.h"
 #include "vault_storage/proto/vault.pb.h"
+#include <expected>
 #include <span>
 #include <string>
 #include <string_view>
@@ -8,12 +9,22 @@
 
 using UUID = std::string;
 
+enum class VaultError {
+  WrongPassword,
+  VaultCorrupted,
+  InvalidFormat,
+  IoError,
+  CryptoError,
+  FileOpenFailed,
+  AuthenticationFailed,
+};
+
 struct PasswordEntry {
   UUID id;
   std::string title;
   std::string login;
   std::string password;
-  std::string nonce;
+  Nonce nonce;
   std::string notes;
 };
 
@@ -28,22 +39,22 @@ public:
 
   void unlock(const std::string &password);
 
-  void lock(Key &key);
+  void set_key(const Key &key);
+
+  void lock();
 
   Vault() = default;
-
-  Vault operator=(const Vault &vault);
-  Vault operator=(Vault &&vault);
-  Vault(const Vault &vault);
-  Vault(Vault &&vault);
 
 private:
   std::vector<PasswordEntry> entries_;
   Key key_;
+  bool locked_;
 };
 
 class Serializator {
 public:
-  void serialize(const std::string &file_path, const Vault &vault);
-  void deserialize(const std::string &path, Vault &vault);
+  static std::expected<void, VaultError> serialize(const std::string &file_path,
+                                                   const Vault &vault);
+  static std::expected<void, VaultError> deserialize(const std::string &path,
+                                                     Vault &vault);
 };

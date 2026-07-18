@@ -13,4 +13,7 @@ MODULE.bazel.lock
 .bazelrc
 .bazeliskrc
 .bazelversion
+vault.nonce
 external/
+*.bin
+*.nonce

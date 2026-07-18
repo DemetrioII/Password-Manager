@@ -13,7 +13,8 @@ void Vault::Remove(std::size_t index) {
 
 const std::vector<PasswordEntry> &Vault::Entries() const { return entries_; }
 
-void Serializator::serialize(const std::string &file_path, const Vault &vault) {
+std::expected<void, VaultError>
+Serializator::serialize(const std::string &file_path, const Vault &vault) {
   password_manager::VaultProto proto;
 
   for (const auto &entry : vault.Entries()) {
@@ -37,7 +38,7 @@ void Serializator::serialize(const std::string &file_path, const Vault &vault) {
 
   std::string serialized;
   if (!proto.SerializeToString(&serialized))
-    throw std::runtime_error("cannot serialize protobuf");
+    return std::unexpected(VaultError::IoError);
 
   Nonce vault_nonce = NonceManager::generate();
 
@@ -50,7 +51,7 @@ void Serializator::serialize(const std::string &file_path, const Vault &vault) {
           serialized.size(),
           reinterpret_cast<const unsigned char *>(vault_nonce.data()),
           vault.key_.data()) != 0) {
-    throw std::runtime_error("vault encryption failed");
+    return std::unexpected(VaultError::CryptoError);
   }
 
   {
@@ -64,20 +65,23 @@ void Serializator::serialize(const std::string &file_path, const Vault &vault) {
     std::ofstream file(file_path, std::ios::binary);
 
     if (!file)
-      throw std::runtime_error("cannot open file");
+      return std::unexpected(VaultError::FileOpenFailed);
 
     file.write(reinterpret_cast<const char *>(encrypted.data()),
                encrypted.size());
   }
+
+  return {};
 }
 
-void Serializator::deserialize(const std::string &path, Vault &vault) {
+std::expected<void, VaultError>
+Serializator::deserialize(const std::string &path, Vault &vault) {
   password_manager::VaultProto proto;
 
   std::ifstream file(path, std::ios::binary);
 
   if (!file)
-    throw std::runtime_error("cannot open file");
+    return std::unexpected(VaultError::FileOpenFailed);
 
   file.seekg(0, std::ios::end);
   const std::streamsize size = file.tellg();
@@ -90,7 +94,7 @@ void Serializator::deserialize(const std::string &path, Vault &vault) {
   Nonce vault_nonce = NonceManager::read_from_file("vault.nonce");
 
   if (encrypted.size() < crypto_secretbox_MACBYTES)
-    throw std::runtime_error("corrupted vault");
+    return std::unexpected(VaultError::VaultCorrupted);
 
   std::string decrypted(encrypted.size() - crypto_secretbox_MACBYTES, '\0');
 
@@ -100,13 +104,11 @@ void Serializator::deserialize(const std::string &path, Vault &vault) {
           encrypted.size(),
           reinterpret_cast<const unsigned char *>(vault_nonce.data()),
           vault.key_.data()) != 0) {
-    throw std::runtime_error("error during decoding");
+    return std::unexpected(VaultError::CryptoError);
   }
 
   if (!proto.ParseFromString(decrypted))
-    throw std::runtime_error("invalid protobuf");
-
-  vault.entries_.clear();
+    return std::unexpected(VaultError::IoError);
 
   for (const auto &e : proto.entries()) {
     PasswordEntry entry;
@@ -124,6 +126,8 @@ void Serializator::deserialize(const std::string &path, Vault &vault) {
 
     vault.Add(std::move(entry));
   }
+
+  return {};
 }
 
 void Vault::unlock(const std::string &password) {
@@ -131,6 +135,7 @@ void Vault::unlock(const std::string &password) {
   auto key = MasterKeyManager::deriveKey(password, salt);
   if (key) {
     key_ = *key;
+    locked_ = false;
     std::cout << "Хранилище разблокировано" << std::endl;
 
   } else {
@@ -138,7 +143,9 @@ void Vault::unlock(const std::string &password) {
   }
 }
 
-void Vault::lock(Key &key) {
-  key_ = key;
-  // здесь надо переписать ключ, перешифровать может быть, но это чуть позжу
+void Vault::set_key(const Key &key) { key_ = key; }
+
+void Vault::lock() {
+  sodium_memzero(key_.data(), key_.size());
+  locked_ = true;
 }

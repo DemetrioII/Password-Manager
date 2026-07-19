@@ -57,6 +57,7 @@ TEST_F(CryptoTest, EmptyString) {
 
 int main() {
   sodium_init();
+  ::testing::InitGoogleTest();
   RUN_ALL_TESTS();
   return 0;
 }

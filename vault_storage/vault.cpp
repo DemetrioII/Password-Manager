@@ -14,7 +14,8 @@ void Vault::Remove(std::size_t index) {
 const std::vector<PasswordEntry> &Vault::Entries() const { return entries_; }
 
 std::expected<void, VaultError>
-Serializator::serialize(const std::string &file_path, const Vault &vault) {
+Serializator::serialize(const std::string &file_path, const Vault &vault,
+                        const std::string &vault_nonce_file) {
   password_manager::VaultProto proto;
 
   for (const auto &entry : vault.Entries()) {
@@ -54,12 +55,7 @@ Serializator::serialize(const std::string &file_path, const Vault &vault) {
     return std::unexpected(VaultError::CryptoError);
   }
 
-  {
-    std::ofstream nonce_file("vault.nonce", std::ios::binary);
-
-    nonce_file.write(reinterpret_cast<const char *>(vault_nonce.data()),
-                     vault_nonce.size());
-  }
+  NonceManager::write_to_file(vault_nonce_file, vault_nonce);
 
   {
     std::ofstream file(file_path, std::ios::binary);
@@ -75,7 +71,8 @@ Serializator::serialize(const std::string &file_path, const Vault &vault) {
 }
 
 std::expected<void, VaultError>
-Serializator::deserialize(const std::string &path, Vault &vault) {
+Serializator::deserialize(const std::string &path, Vault &vault,
+                          const std::string &vault_nonce_file) {
   password_manager::VaultProto proto;
 
   std::ifstream file(path, std::ios::binary);
@@ -91,7 +88,14 @@ Serializator::deserialize(const std::string &path, Vault &vault) {
 
   file.read(reinterpret_cast<char *>(encrypted.data()), size);
 
-  Nonce vault_nonce = NonceManager::read_from_file("vault.nonce");
+  auto vault_nonce_res = NonceManager::read_from_file(vault_nonce_file);
+
+  Nonce vault_nonce;
+  if (vault_nonce_res) {
+    vault_nonce = *vault_nonce_res;
+  } else {
+    return std::unexpected(VaultError::NonceCorrupted);
+  }
 
   if (encrypted.size() < crypto_secretbox_MACBYTES)
     return std::unexpected(VaultError::VaultCorrupted);
@@ -130,8 +134,14 @@ Serializator::deserialize(const std::string &path, Vault &vault) {
   return {};
 }
 
-void Vault::unlock(const std::string &password) {
-  Salt salt = SaltManager::getSaltFromFile();
+std::expected<void, VaultError> Vault::unlock(const std::string &password) {
+  auto salt_res = SaltManager::getSaltFromFile("salt.bin");
+  Salt salt;
+  if (salt_res) {
+    salt = *salt_res;
+  } else {
+    return std::unexpected(VaultError::SaltCorrupted);
+  }
   auto key = MasterKeyManager::deriveKey(password, salt);
   if (key) {
     key_ = *key;
@@ -141,6 +151,8 @@ void Vault::unlock(const std::string &password) {
   } else {
     std::cerr << "Неверный мастер-пароль" << std::endl;
   }
+
+  return {};
 }
 
 void Vault::set_key(const Key &key) { key_ = key; }

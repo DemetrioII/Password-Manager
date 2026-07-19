@@ -24,7 +24,6 @@ std::optional<Key> MasterKeyManager::deriveKey(const std::string &password,
                     crypto_pwhash_OPSLIMIT_INTERACTIVE,
                     crypto_pwhash_MEMLIMIT_INTERACTIVE,
                     crypto_pwhash_ALG_DEFAULT) != 0) {
-    throw std::runtime_error("key derivation");
     return std::nullopt;
   }
 

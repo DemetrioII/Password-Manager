@@ -17,6 +17,8 @@ enum class VaultError {
   CryptoError,
   FileOpenFailed,
   AuthenticationFailed,
+  SaltCorrupted,
+  NonceCorrupted,
 };
 
 struct PasswordEntry {
@@ -37,7 +39,8 @@ public:
 
   const std::vector<PasswordEntry> &Entries() const;
 
-  void unlock(const std::string &password);
+  [[nodiscard]] std::expected<void, VaultError>
+  unlock(const std::string &password);
 
   void set_key(const Key &key);
 
@@ -53,8 +56,12 @@ private:
 
 class Serializator {
 public:
-  static std::expected<void, VaultError> serialize(const std::string &file_path,
-                                                   const Vault &vault);
-  static std::expected<void, VaultError> deserialize(const std::string &path,
-                                                     Vault &vault);
+  [[nodiscard]]
+  static std::expected<void, VaultError>
+  serialize(const std::string &file_path, const Vault &vault,
+            const std::string &vault_nonce_file);
+  [[nodiscard]]
+  static std::expected<void, VaultError>
+  deserialize(const std::string &path, Vault &vault,
+              const std::string &vault_nonce_file);
 };

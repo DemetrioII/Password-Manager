@@ -5,6 +5,7 @@
 int main() {
   Key key;
   Salt salt = SaltManager::generateSalt();
+  SaltManager::saveToFile(salt, "salt.bin");
   std::string master_password;
   std::cin >> master_password;
   key = *MasterKeyManager::deriveKey(master_password, salt);
@@ -17,7 +18,7 @@ int main() {
   entry.nonce = nonce;
   entry.title = entry.notes = "";
   vault.Add(entry);
-  Serializator::serialize("vault.bin", vault);
-  Serializator::deserialize("vault.bin", vault);
+  Serializator::serialize("vault.bin", vault, "vault.nonce");
+  Serializator::deserialize("vault.bin", vault, "vault.nonce");
   return 0;
 }

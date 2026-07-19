@@ -21,12 +21,10 @@ protected:
     entry.title = "";
 
     salt = SaltManager::generateSalt();
+    SaltManager::saveToFile(salt, "salt.bin");
     key = *MasterKeyManager::deriveKey("master_password", salt);
     vault_nonce = NonceManager::generate();
-
-    std::ofstream vault_nonce_file("vault.nonce", std::ios::binary);
-    vault_nonce_file.write(reinterpret_cast<const char *>(vault_nonce.data()),
-                           vault_nonce.size());
+    NonceManager::write_to_file("vault.nonce", vault_nonce);
   }
 
   void TearDown() override {}
@@ -36,12 +34,14 @@ TEST_F(VaultTest, EmptyVaultSerialization) {
   Vault vault;
   vault.set_key(key);
 
-  EXPECT_TRUE(Serializator::serialize(vault_file, vault).has_value());
+  EXPECT_TRUE(
+      Serializator::serialize(vault_file, vault, "vault.nonce").has_value());
 
   Vault restored;
   restored.set_key(key);
 
-  auto deserialize_res = Serializator::deserialize(vault_file, restored);
+  auto deserialize_res =
+      Serializator::deserialize(vault_file, restored, "vault.nonce");
 
   EXPECT_TRUE(deserialize_res.has_value());
 
@@ -54,12 +54,14 @@ TEST_F(VaultTest, SerializeDeserializeOneEntry) {
 
   vault.Add(entry);
 
-  Serializator::serialize(vault_file, vault);
+  EXPECT_TRUE(
+      Serializator::serialize(vault_file, vault, "vault.nonce").has_value());
 
   Vault restored;
   restored.set_key(key);
 
-  Serializator::deserialize(vault_file, restored);
+  EXPECT_TRUE(Serializator::deserialize(vault_file, restored, "vault.nonce")
+                  .has_value());
 
   ASSERT_EQ(restored.Entries().size(), 1);
 
@@ -94,7 +96,8 @@ TEST_F(VaultTest, WrongKeyThrows) {
 
   vault.Add(entry);
 
-  Serializator::serialize(vault_file, vault);
+  EXPECT_TRUE(
+      Serializator::serialize(vault_file, vault, "vault.nonce").has_value());
 
   Vault restored;
 

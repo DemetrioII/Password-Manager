@@ -1,10 +1,15 @@
 #pragma once
 #include <array>
+#include <expected>
 #include <fstream>
 #include <optional>
 #include <sodium.h>
 #include <span>
 #include <string>
+
+enum class KeyManagerError {
+  FileNotFound,
+};
 
 using Salt = std::array<std::byte, crypto_pwhash_SALTBYTES>;
 
@@ -30,25 +35,35 @@ private:
 
 class MasterKeyManager {
 public:
+  [[nodiscard]]
   static std::optional<Key> deriveKey(const std::string &password,
                                       const Salt &salt);
 };
 
 class SaltManager {
 public:
+  static void saveToFile(const Salt &salt, const std::string &file_path) {
+    std::ofstream salt_file(file_path, std::ios::binary);
+    salt_file.write(reinterpret_cast<const char *>(salt.data()), salt.size());
+  }
+
   static Salt generateSalt() {
     Salt salt;
 
     randombytes_buf(salt.data(), salt.size());
-    std::ofstream salt_file("salt.bin", std::ios::binary);
-    salt_file.write(reinterpret_cast<const char *>(salt.data()), salt.size());
     return salt;
   }
 
-  static Salt getSaltFromFile() {
+  [[nodiscard]]
+  static std::expected<Salt, KeyManagerError>
+  getSaltFromFile(const std::string &file_path) {
     Salt salt;
-    std::ifstream salt_file("salt.bin", std::ios::binary);
-    salt_file.read(reinterpret_cast<char *>(salt.data()), salt.size());
+    try {
+      std::ifstream salt_file(file_path, std::ios::binary);
+      salt_file.read(reinterpret_cast<char *>(salt.data()), salt.size());
+    } catch (std::exception &e) {
+      return std::unexpected(KeyManagerError::FileNotFound);
+    }
     return salt;
   }
 };
@@ -61,10 +76,22 @@ public:
     return nonce;
   }
 
-  static Nonce read_from_file(const std::string &file_path) {
+  [[nodiscard]]
+  static std::expected<Nonce, KeyManagerError>
+  read_from_file(const std::string &file_path) {
     Nonce nonce;
-    std::ifstream nonce_file(file_path, std::ios::binary);
-    nonce_file.read(reinterpret_cast<char *>(nonce.data()), nonce.size());
+    try {
+      std::ifstream nonce_file(file_path, std::ios::binary);
+      nonce_file.read(reinterpret_cast<char *>(nonce.data()), nonce.size());
+    } catch (std::exception &e) {
+      return std::unexpected(KeyManagerError::FileNotFound);
+    }
     return nonce;
+  }
+
+  static void write_to_file(const std::string &file_path, const Nonce &nonce) {
+    std::ofstream nonce_file(file_path, std::ios::binary);
+    nonce_file.write(reinterpret_cast<const char *>(nonce.data()),
+                     nonce.size());
   }
 };

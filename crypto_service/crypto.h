@@ -8,6 +8,10 @@
 
 #define KEY_LEN crypto_box_SEEDBYTES
 
+enum class CryptoError {
+
+};
+
 class CryptoService {
 public:
   static std::string cypher(const std::string &password, Nonce &nonce, Key key);

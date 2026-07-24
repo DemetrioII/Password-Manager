@@ -5,17 +5,54 @@
 #include <string_view>
 #include <unistd.h>
 
-void Vault::Add(const PasswordEntry &entry) { entries_.push_back(entry); }
+VaultKeys vault::derive_keys_from_password(
+    const std::string &password,
+    const std::array<std::byte, crypto_pwhash_SALTBYTES> &salt_meta,
+    const std::array<std::byte, crypto_pwhash_SALTBYTES> &salt_pass) {
+  VaultKeys keys;
 
-void Vault::Remove(std::size_t index) {
-  entries_.erase(entries_.begin() + index);
+  if (crypto_pwhash(keys.meta_key.data(), keys.meta_key.size(),
+                    password.c_str(), password.size(),
+                    reinterpret_cast<const unsigned char *>(salt_meta.data()),
+                    crypto_pwhash_OPSLIMIT_INTERACTIVE,
+                    crypto_pwhash_MEMLIMIT_INTERACTIVE,
+                    crypto_pwhash_ALG_ARGON2ID13) != 0) {
+    throw std::runtime_error("Out of memory during Argon2id");
+  }
+
+  if (crypto_pwhash(keys.master_key.data(), keys.master_key.size(),
+                    password.c_str(), password.size(),
+                    reinterpret_cast<const unsigned char *>(salt_pass.data()),
+                    crypto_pwhash_OPSLIMIT_INTERACTIVE,
+                    crypto_pwhash_MEMLIMIT_INTERACTIVE,
+                    crypto_pwhash_ALG_ARGON2ID13) != 0) {
+    throw std::runtime_error("Out of memory during Argon2id");
+  }
+
+  return keys;
 }
 
-const std::vector<PasswordEntry> &Vault::Entries() const { return entries_; }
+std::expected<void, VaultError> vault::Vault::Add(const PasswordEntry &entry) {
+  if (locked_)
+    return std::unexpected(VaultError::VaultLocked);
+  entries_.push_back(entry);
+  return {};
+}
+
+std::expected<void, VaultError> vault::Vault::Remove(std::size_t index) {
+  if (locked_)
+    return std::unexpected(VaultError::VaultLocked);
+  entries_.erase(entries_.begin() + index);
+  return {};
+}
+
+const std::vector<PasswordEntry> &vault::Vault::Entries() const {
+  return entries_;
+}
 
 std::expected<void, VaultError>
-Serializator::serialize(const std::string &file_path, const Vault &vault,
-                        const std::string &vault_nonce_file) {
+vault::Serializator::serialize(const std::string &file_path, const Vault &vault,
+                               const std::string &vault_nonce_file) {
   password_manager::VaultProto proto;
 
   for (const auto &entry : vault.Entries()) {
@@ -27,7 +64,8 @@ Serializator::serialize(const std::string &file_path, const Vault &vault,
 
     Nonce nonce = NonceManager::generate();
 
-    auto ciphertext = CryptoService::cypher(entry.password, nonce, vault.key_);
+    auto ciphertext =
+        CryptoService::cypher(entry.password, nonce, vault.keys_.master_key);
 
     e->set_nonce(reinterpret_cast<const char *>(nonce.data()), nonce.size());
 
@@ -51,28 +89,23 @@ Serializator::serialize(const std::string &file_path, const Vault &vault,
           reinterpret_cast<const unsigned char *>(serialized.data()),
           serialized.size(),
           reinterpret_cast<const unsigned char *>(vault_nonce.data()),
-          vault.key_.data()) != 0) {
+          vault.keys_.meta_key.data()) != 0) {
     return std::unexpected(VaultError::CryptoError);
   }
 
   NonceManager::write_to_file(vault_nonce_file, vault_nonce);
 
-  {
-    std::ofstream file(file_path, std::ios::binary);
-
-    if (!file)
-      return std::unexpected(VaultError::FileOpenFailed);
-
-    file.write(reinterpret_cast<const char *>(encrypted.data()),
-               encrypted.size());
+  auto write_res = SafeFileWriter::WriteAtomic(file_path, encrypted);
+  if (!write_res) {
+    return std::unexpected(VaultError::FileOpenFailed);
   }
 
   return {};
 }
 
 std::expected<void, VaultError>
-Serializator::deserialize(const std::string &path, Vault &vault,
-                          const std::string &vault_nonce_file) {
+vault::Serializator::deserialize(const std::string &path, Vault &vault,
+                                 const std::string &vault_nonce_file) {
   password_manager::VaultProto proto;
 
   std::ifstream file(path, std::ios::binary);
@@ -107,13 +140,14 @@ Serializator::deserialize(const std::string &path, Vault &vault,
           reinterpret_cast<const unsigned char *>(encrypted.data()),
           encrypted.size(),
           reinterpret_cast<const unsigned char *>(vault_nonce.data()),
-          vault.key_.data()) != 0) {
+          vault.keys_.meta_key.data()) != 0) {
     return std::unexpected(VaultError::CryptoError);
   }
 
   if (!proto.ParseFromString(decrypted))
     return std::unexpected(VaultError::IoError);
 
+  vault.entries_.clear();
   for (const auto &e : proto.entries()) {
     PasswordEntry entry;
 
@@ -126,38 +160,27 @@ Serializator::deserialize(const std::string &path, Vault &vault,
 
     std::memcpy(nonce.data(), e.nonce().data(), crypto_secretbox_NONCEBYTES);
 
-    entry.password = CryptoService::decypher(e.password(), nonce, vault.key_);
+    entry.password =
+        CryptoService::decypher(e.password(), nonce, vault.keys_.master_key);
 
-    vault.Add(std::move(entry));
+    if (!vault.Add(std::move(entry)).has_value())
+      return std::unexpected(VaultError::VaultLocked);
   }
 
   return {};
 }
 
-std::expected<void, VaultError> Vault::unlock(const std::string &password) {
-  auto salt_res = SaltManager::getSaltFromFile("salt.bin");
-  Salt salt;
-  if (salt_res) {
-    salt = *salt_res;
-  } else {
-    return std::unexpected(VaultError::SaltCorrupted);
-  }
-  auto key = MasterKeyManager::deriveKey(password, salt);
-  if (key) {
-    key_ = *key;
-    locked_ = false;
-    std::cout << "Хранилище разблокировано" << std::endl;
-
-  } else {
-    std::cerr << "Неверный мастер-пароль" << std::endl;
-  }
-
+std::expected<void, VaultError> vault::Vault::unlock() {
+  locked_ = false;
   return {};
 }
 
-void Vault::set_key(const Key &key) { key_ = key; }
+void vault::Vault::set_key(VaultKeys &&key) {
+  keys_.master_key = std::move(key.master_key);
+  keys_.meta_key = std::move(key.meta_key);
+}
 
-void Vault::lock() {
-  sodium_memzero(key_.data(), key_.size());
+void vault::Vault::lock() {
+  sodium_memzero(keys_.master_key.data(), keys_.master_key.size());
   locked_ = true;
 }

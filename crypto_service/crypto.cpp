@@ -1,7 +1,7 @@
 #include "crypto.h"
 
 std::string CryptoService::cypher(const std::string &password, Nonce &nonce,
-                                  Key key) {
+                                  const Key &key) {
   std::string ciphertext(password.size() + crypto_secretbox_MACBYTES, '\0');
 
   if (crypto_secretbox_easy(
@@ -17,7 +17,7 @@ std::string CryptoService::cypher(const std::string &password, Nonce &nonce,
 }
 
 std::string CryptoService::decypher(const std::string &ciphertext, Nonce &nonce,
-                                    Key key) {
+                                    const Key &key) {
   if (ciphertext.size() < crypto_secretbox_MACBYTES) {
     throw std::runtime_error("ciphertext is too short");
   }

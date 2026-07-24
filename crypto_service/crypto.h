@@ -14,8 +14,9 @@ enum class CryptoError {
 
 class CryptoService {
 public:
-  static std::string cypher(const std::string &password, Nonce &nonce, Key key);
+  static std::string cypher(const std::string &password, Nonce &nonce,
+                            const Key &key);
 
   static std::string decypher(const std::string &password, Nonce &nonce,
-                              Key key);
+                              const Key &key);
 };

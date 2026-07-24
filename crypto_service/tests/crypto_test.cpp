@@ -46,6 +46,13 @@ TEST_F(CryptoTest, WrongKeyFailsDecryption) {
 
   EXPECT_THROW(CryptoService::decypher(ciphertext, nonce, wrong_key),
                std::runtime_error);
+
+  Salt other_salt = SaltManager::generateSalt();
+
+  wrong_key = *MasterKeyManager::deriveKey("master", other_salt);
+
+  EXPECT_THROW(CryptoService::decypher(ciphertext, nonce, wrong_key),
+               std::runtime_error);
 }
 
 TEST_F(CryptoTest, EmptyString) {
@@ -58,6 +65,5 @@ TEST_F(CryptoTest, EmptyString) {
 int main() {
   sodium_init();
   ::testing::InitGoogleTest();
-  RUN_ALL_TESTS();
-  return 0;
+  return RUN_ALL_TESTS();
 }

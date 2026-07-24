@@ -13,7 +13,7 @@ unsigned char *Key::data() noexcept {
   return reinterpret_cast<unsigned char *>(data_.data());
 }
 
-size_t Key::size() noexcept { return data_.size(); }
+size_t Key::size() const noexcept { return data_.size(); }
 
 std::optional<Key> MasterKeyManager::deriveKey(const std::string &password,
                                                const Salt &salt) {

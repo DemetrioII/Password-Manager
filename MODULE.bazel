@@ -3,20 +3,80 @@ module(
     version = "0.1.0",
 )
 
-bazel_dep(name = "rules_cc", version = "0.2.17")
-bazel_dep(name = "rules_python", version = "1.7.0")
-bazel_dep(name = "nlohmann_json", version = "3.12.0.bcr.1")
-bazel_dep(name = "protobuf", version = "33.4")
-bazel_dep(name = "wolfd_bazel_compile_commands", version = "0.5.2")
-bazel_dep(name = "libsodium", version = "1.0.19")
-bazel_dep(name = "rules_ruby", version = "0.27.0")
-bazel_dep(name = "platforms", version = "1.1.0")
-bazel_dep(name = "googletest", version = "1.17.0.bcr.2")
-bazel_dep(name = "hedron_compile_commands", dev_dependency = True)
+# C/C++
+bazel_dep(
+    name = "rules_cc",
+    version = "0.2.17",
+)
 
-# 2. Так как его нет в BCR, явно перенаправляем Bazel на гитхаб Hedron
+# Python rules
+bazel_dep(
+    name = "rules_python",
+    version = "1.7.0",
+)
+
+# JSON
+bazel_dep(
+    name = "nlohmann_json",
+    version = "3.12.0.bcr.1",
+)
+
+# Protobuf
+bazel_dep(
+    name = "protobuf",
+    version = "33.4",
+)
+
+# Crypto
+bazel_dep(
+    name = "libsodium",
+    version = "1.0.19",
+)
+
+# Ruby (если реально используется)
+bazel_dep(
+    name = "rules_ruby",
+    version = "0.27.0",
+)
+
+# Tests
+bazel_dep(
+    name = "googletest",
+    version = "1.17.0.bcr.2",
+)
+
+# Compile commands
+bazel_dep(
+    name = "hedron_compile_commands",
+    dev_dependency = True,
+)
 git_override(
     module_name = "hedron_compile_commands",
+    commit = "abb61a688167623088f8768cc9264798df6a9d10",
     remote = "https://github.com/hedronvision/bazel-compile-commands-extractor.git",
-    commit = "abb61a688167623088f8768cc9264798df6a9d10", # Актуальный стабильный коммит с поддержкой Bzlmod
+)
+
+# Aspect utilities
+bazel_dep(
+    name = "aspect_bazel_lib",
+    version = "2.22.5",
+)
+
+bazel_dep(
+    name = "rules_go",
+    version = "0.59.0",
+)
+
+bazel_dep(name = "rules_qt", version="0.0.6")
+
+qt = use_extension("@rules_qt//extension:qt.bzl", "fetch")
+qt.install(
+    name = "qt_linux_x86_64",
+    build_file = "@rules_qt//extension:qt/6.8.3/linux_x86_64.BUILD",
+    os = "linux",
+)
+use_repo(qt, "qt_linux_x86_64")
+
+register_toolchains(
+    "@rules_qt//tools:all",
 )

@@ -6,13 +6,13 @@
 #include <unistd.h>
 
 VaultKeys vault::derive_keys_from_password(
-    const std::string &password,
+    const SecureString &password,
     const std::array<std::byte, crypto_pwhash_SALTBYTES> &salt_meta,
     const std::array<std::byte, crypto_pwhash_SALTBYTES> &salt_pass) {
   VaultKeys keys;
 
-  if (crypto_pwhash(keys.meta_key.data(), keys.meta_key.size(),
-                    password.c_str(), password.size(),
+  if (crypto_pwhash(keys.meta_key.data(), keys.meta_key.size(), password.data(),
+                    password.size(),
                     reinterpret_cast<const unsigned char *>(salt_meta.data()),
                     crypto_pwhash_OPSLIMIT_INTERACTIVE,
                     crypto_pwhash_MEMLIMIT_INTERACTIVE,
@@ -21,7 +21,7 @@ VaultKeys vault::derive_keys_from_password(
   }
 
   if (crypto_pwhash(keys.master_key.data(), keys.master_key.size(),
-                    password.c_str(), password.size(),
+                    password.data(), password.size(),
                     reinterpret_cast<const unsigned char *>(salt_pass.data()),
                     crypto_pwhash_OPSLIMIT_INTERACTIVE,
                     crypto_pwhash_MEMLIMIT_INTERACTIVE,

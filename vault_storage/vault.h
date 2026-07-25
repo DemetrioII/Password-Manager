@@ -116,7 +116,7 @@ struct VaultKeys {
 
 namespace vault {
 VaultKeys derive_keys_from_password(
-    const std::string &password,
+    const SecureString &password,
     const std::array<std::byte, crypto_pwhash_SALTBYTES> &salt_meta,
     const std::array<std::byte, crypto_pwhash_SALTBYTES> &salt_pass);
 class Vault {

@@ -4,11 +4,15 @@
 #include "vault_storage/vault.h"
 
 int main(int argc, char *argv[]) {
+  if (sodium_init() < 0) {
+    return 1;
+  }
   std::string command;
   vault::Vault vault;
   while (std::cin >> command) {
     if (command == "add") {
-      std::string login, password;
+      std::string login;
+      std::string password{""};
       std::cout << "Enter your login: ";
       std::cin >> login;
       std::cout << "Enter your password: ";
@@ -32,7 +36,8 @@ int main(int argc, char *argv[]) {
     }
 
     else if (command == "save") {
-      std::string name, master_password;
+      std::string name;
+      SecureString master_password{""};
       std::cout << "Enter file name: ";
       std::cin >> name;
       std::cout << "Enter your password: ";
@@ -53,7 +58,8 @@ int main(int argc, char *argv[]) {
     }
 
     else if (command == "load") {
-      std::string name, master_password;
+      std::string name;
+      SecureString master_password{""};
       std::cout << "Enter name of vault file: ";
       std::cin >> name;
       std::cout << "Enter master password: ";

@@ -1,14 +1,73 @@
 #pragma once
+#include <algorithm>
 #include <array>
 #include <expected>
 #include <fstream>
 #include <optional>
 #include <sodium.h>
 #include <span>
+#include <sstream>
 #include <string>
+#include <utility>
 
 enum class KeyManagerError {
   FileNotFound,
+};
+
+class SecureString {
+public:
+  explicit SecureString(std::string_view data);
+
+  SecureString(const SecureString &) = delete;
+  SecureString &operator=(const SecureString &) = delete;
+
+  SecureString(SecureString &&) noexcept;
+  SecureString &operator=(SecureString &&) noexcept;
+
+  void assign(const char *data, std::size_t size) {
+    clear();
+    if (size == 0 || data == nullptr)
+      return;
+
+    data_ = static_cast<char *>(sodium_malloc(size));
+    if (!data_) {
+      throw std::bad_alloc();
+    }
+
+    std::copy_n(data, size, data_);
+    size_ = size;
+  }
+
+  void clear() noexcept {
+    if (data_) {
+      sodium_free(data_);
+      data_ = nullptr;
+    }
+    size_ = 0;
+  }
+
+  [[nodiscard]] const char *data() const noexcept { return data_; }
+
+  [[nodiscard]] bool empty() const noexcept { return size_ == 0; }
+
+  friend std::istream &operator>>(std::istream &is, SecureString &ss) {
+    std::string buf;
+    if (is >> buf) {
+      ss.assign(buf.data(), buf.size());
+      sodium_memzero(buf.data(), buf.size());
+    }
+    return is;
+  }
+
+  ~SecureString();
+
+  std::string view() const noexcept;
+
+  std::size_t size() const noexcept;
+
+private:
+  char *data_ = nullptr;
+  std::size_t size_ = 0;
 };
 
 #define MESSAGE ((const unsigned char *)"test")
@@ -72,7 +131,7 @@ private:
 class MasterKeyManager {
 public:
   [[nodiscard]]
-  static std::optional<Key> deriveKey(const std::string &password,
+  static std::optional<Key> deriveKey(SecureString &&password,
                                       const Salt &salt);
 };
 

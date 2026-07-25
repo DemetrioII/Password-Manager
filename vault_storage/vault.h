@@ -130,29 +130,34 @@ public:
 
   [[nodiscard]] std::expected<void, VaultError> unlock();
 
-  void set_key(VaultKeys &&keys);
-
   void lock();
 
   Vault() = default;
 
+  void load_metadata(const std::string &salt_meta_file,
+                     const std::string &salt_master_file,
+                     const std::string &nonce_file);
+
+  void save_metadata(const std::string &name);
+
+  void init();
+
 private:
   std::vector<PasswordEntry> entries_;
-  VaultKeys keys_;
-  std::string path_ = "vault.bin";
-  bool locked_;
+  Salt meta_salt_;
+  Salt master_salt_;
+  Nonce nonce_;
+  bool locked_ = false;
 };
 
 class Serializator {
 public:
   [[nodiscard]]
   static std::expected<void, VaultError>
-  serialize(const std::string &file_path, const Vault &vault,
-            const std::string &vault_nonce_file);
+  serialize(VaultKeys &&, const std::string &file_path, const Vault &vault);
   [[nodiscard]]
   static std::expected<void, VaultError>
-  deserialize(const std::string &path, Vault &vault,
-              const std::string &vault_nonce_file);
+  deserialize(VaultKeys &&, const std::string &path, Vault &vault);
 };
 
 } // namespace vault

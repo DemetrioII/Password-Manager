@@ -32,6 +32,26 @@ VaultKeys vault::derive_keys_from_password(
   return keys;
 }
 
+void vault::Vault::init() {
+  master_salt_ = SaltManager::generateSalt();
+  meta_salt_ = SaltManager::generateSalt();
+  nonce_ = NonceManager::generate();
+}
+
+void vault::Vault::load_metadata(const std::string &salt_meta_file,
+                                 const std::string &salt_master_file,
+                                 const std::string &nonce_file) {
+  nonce_ = *NonceManager::read_from_file(nonce_file);
+  meta_salt_ = *SaltManager::getSaltFromFile(salt_meta_file);
+  master_salt_ = *SaltManager::getSaltFromFile(salt_master_file);
+}
+
+void vault::Vault::save_metadata(const std::string &name) {
+  NonceManager::write_to_file("vault." + name + ".nonce", nonce_);
+  SaltManager::saveToFile(master_salt_, "vault." + name + ".master.salt.bin");
+  SaltManager::saveToFile(meta_salt_, "vault." + name + ".meta.salt.bin");
+}
+
 std::expected<void, VaultError> vault::Vault::Add(const PasswordEntry &entry) {
   if (locked_)
     return std::unexpected(VaultError::VaultLocked);
@@ -51,8 +71,8 @@ const std::vector<PasswordEntry> &vault::Vault::Entries() const {
 }
 
 std::expected<void, VaultError>
-vault::Serializator::serialize(const std::string &file_path, const Vault &vault,
-                               const std::string &vault_nonce_file) {
+vault::Serializator::serialize(VaultKeys &&keys, const std::string &file_path,
+                               const Vault &vault) {
   password_manager::VaultProto proto;
 
   for (const auto &entry : vault.Entries()) {
@@ -65,7 +85,7 @@ vault::Serializator::serialize(const std::string &file_path, const Vault &vault,
     Nonce nonce = NonceManager::generate();
 
     auto ciphertext =
-        CryptoService::cypher(entry.password, nonce, vault.keys_.master_key);
+        CryptoService::cypher(entry.password, nonce, keys.master_key);
 
     e->set_nonce(reinterpret_cast<const char *>(nonce.data()), nonce.size());
 
@@ -79,8 +99,6 @@ vault::Serializator::serialize(const std::string &file_path, const Vault &vault,
   if (!proto.SerializeToString(&serialized))
     return std::unexpected(VaultError::IoError);
 
-  Nonce vault_nonce = NonceManager::generate();
-
   std::vector<unsigned char> encrypted(serialized.size() +
                                        crypto_secretbox_MACBYTES);
 
@@ -88,12 +106,10 @@ vault::Serializator::serialize(const std::string &file_path, const Vault &vault,
           reinterpret_cast<unsigned char *>(encrypted.data()),
           reinterpret_cast<const unsigned char *>(serialized.data()),
           serialized.size(),
-          reinterpret_cast<const unsigned char *>(vault_nonce.data()),
-          vault.keys_.meta_key.data()) != 0) {
+          reinterpret_cast<const unsigned char *>(vault.nonce_.data()),
+          keys.meta_key.data()) != 0) {
     return std::unexpected(VaultError::CryptoError);
   }
-
-  NonceManager::write_to_file(vault_nonce_file, vault_nonce);
 
   auto write_res = SafeFileWriter::WriteAtomic(file_path, encrypted);
   if (!write_res) {
@@ -104,8 +120,8 @@ vault::Serializator::serialize(const std::string &file_path, const Vault &vault,
 }
 
 std::expected<void, VaultError>
-vault::Serializator::deserialize(const std::string &path, Vault &vault,
-                                 const std::string &vault_nonce_file) {
+vault::Serializator::deserialize(VaultKeys &&keys, const std::string &path,
+                                 Vault &vault) {
   password_manager::VaultProto proto;
 
   std::ifstream file(path, std::ios::binary);
@@ -121,15 +137,6 @@ vault::Serializator::deserialize(const std::string &path, Vault &vault,
 
   file.read(reinterpret_cast<char *>(encrypted.data()), size);
 
-  auto vault_nonce_res = NonceManager::read_from_file(vault_nonce_file);
-
-  Nonce vault_nonce;
-  if (vault_nonce_res) {
-    vault_nonce = *vault_nonce_res;
-  } else {
-    return std::unexpected(VaultError::NonceCorrupted);
-  }
-
   if (encrypted.size() < crypto_secretbox_MACBYTES)
     return std::unexpected(VaultError::VaultCorrupted);
 
@@ -139,8 +146,8 @@ vault::Serializator::deserialize(const std::string &path, Vault &vault,
           reinterpret_cast<unsigned char *>(decrypted.data()),
           reinterpret_cast<const unsigned char *>(encrypted.data()),
           encrypted.size(),
-          reinterpret_cast<const unsigned char *>(vault_nonce.data()),
-          vault.keys_.meta_key.data()) != 0) {
+          reinterpret_cast<const unsigned char *>(vault.nonce_.data()),
+          keys.meta_key.data()) != 0) {
     return std::unexpected(VaultError::CryptoError);
   }
 
@@ -161,7 +168,7 @@ vault::Serializator::deserialize(const std::string &path, Vault &vault,
     std::memcpy(nonce.data(), e.nonce().data(), crypto_secretbox_NONCEBYTES);
 
     entry.password =
-        CryptoService::decypher(e.password(), nonce, vault.keys_.master_key);
+        CryptoService::decypher(e.password(), nonce, keys.master_key);
 
     if (!vault.Add(std::move(entry)).has_value())
       return std::unexpected(VaultError::VaultLocked);
@@ -175,12 +182,4 @@ std::expected<void, VaultError> vault::Vault::unlock() {
   return {};
 }
 
-void vault::Vault::set_key(VaultKeys &&key) {
-  keys_.master_key = std::move(key.master_key);
-  keys_.meta_key = std::move(key.meta_key);
-}
-
-void vault::Vault::lock() {
-  sodium_memzero(keys_.master_key.data(), keys_.master_key.size());
-  locked_ = true;
-}
+void vault::Vault::lock() { locked_ = true; }

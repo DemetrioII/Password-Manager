@@ -1,1 +1,10 @@
-#include "UI.h"
+/*#include "UI.h"
+
+int main(int argc, char *argv[]) {
+  QApplication app(argc, argv);
+
+  MainWindow window;
+  window.show();
+
+  return app.exec();
+}*/

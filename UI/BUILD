@@ -2,15 +2,16 @@ load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 
 cc_library(
 	name = "UI",
+	includes = [
+		"/usr/include/x86_64-linux-gnu/qt6",
+	],
 	hdrs = [
 		"UI.h",
 	],
 	srcs = [
 		"UI.cpp",
 	],
-	deps = [
-		"@rules_qt//:qt_core",
-		"@rules_qt//:qt_widgets",
-		"@rules_qt//:qt_gui",
+	visibility = [
+		"//visibility:public"
 	],
 )

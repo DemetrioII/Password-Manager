@@ -3,6 +3,8 @@ module(
     version = "0.1.0",
 )
 
+bazel_dep(name = "platforms", version = "0.0.10")
+
 # C/C++
 bazel_dep(
     name = "rules_cc",
@@ -67,16 +69,67 @@ bazel_dep(
     version = "0.59.0",
 )
 
-bazel_dep(name = "rules_qt", version="0.0.6")
+bazel_dep(name = "rules_qt", dev_dependency=True)
 
-qt = use_extension("@rules_qt//extension:qt.bzl", "fetch")
-qt.install(
-    name = "qt_linux_x86_64",
-    build_file = "@rules_qt//extension:qt/6.8.3/linux_x86_64.BUILD",
-    os = "linux",
+git_override(
+	module_name = "rules_qt",
+	remote = "https://github.com/kklochkov/rules_qt",
+	commit = "212c181670e3c8fd8a21a7a58484f506c98446c3",
 )
-use_repo(qt, "qt_linux_x86_64")
+
+qt = use_extension("@rules_qt//qt:extensions.bzl", "qt")
+qt.remote_repo(
+    name = "qt5_remote",
+    base_url = "https://download.qt.io/archive/qt/5.15/5.15.18/submodules",
+    configure_args = [
+        "-opensource",
+        "-confirm-license",
+        "-release",
+        "-shared",
+        "-nomake",
+        "examples",
+        "-nomake",
+        "tests",
+    ],
+    # @unsorted-dict-items
+    # order matters
+    modules = {
+        "qtbase-everywhere-opensource-src-5.15.18.tar.xz": "7b632550ea1048fc10c741e46e2e3b093e5ca94dfa6209e9e0848800e247023b",
+    },
+    prefix = "qt-5.15.18",
+)
+# See examples/MODULE.bazel for complete configure_args and modules values.
+
+qt.local_repo(
+    name = "qt6_local",
+    # Single-platform shorthand:
+    # path = "/opt/homebrew/opt/qt",
+    # Multi-platform:
+    paths = {
+        "macos-arm64": "/opt/homebrew/opt/qt",
+        "linux-x86_64": "/usr/lib/qt6",
+    },
+)
+
+qt.active_sdk(
+    name = "qt",
+    repo = "qt6_local",  # or "qt6_local"
+)
+
+use_repo(qt, "qt")
+
+# optional: add Qt5 local and switch active SDK
+# qt.local_repo(
+#     name = "qt5_local",
+#     paths = {
+#         "macos-arm64": "/opt/homebrew/opt/qt@5",
+#         "linux-x86_64": "/usr/lib/x86_64-linux-gnu/qt5",
+#     },
+# )
+# qt.active_sdk(name = "qt", repo = "qt5_local")
 
 register_toolchains(
-    "@rules_qt//tools:all",
+    "@qt//:qt_linux_x86_64_toolchain",
+    "@qt//:qt_linux_arm64_toolchain",
+    "@qt//:qt_osx_arm64_toolchain",
 )

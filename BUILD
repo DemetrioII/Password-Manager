@@ -5,11 +5,11 @@ cc_binary(
 	srcs = ["main.cpp"],
 	copts = [
 		"-std=c++23",
+		"-g",
 	],
 	deps = [
 		"//crypto_service:crypto_service",
 		"//master_key_generator:master_key",
 		"//vault_storage:vault",
-		"//UI:UI",
 	],
 )

@@ -1,12 +1,13 @@
-#include "UI/UI.h"
 #include "crypto_service/crypto.h"
 #include "master_key_generator/masterkey.h"
 #include "vault_storage/vault.h"
+#include <thread>
 
 int main(int argc, char *argv[]) {
   if (sodium_init() < 0) {
     return 1;
   }
+  std::optional<std::jthread> net_thread;
   std::string command;
   vault::Vault vault;
   while (std::cin >> command) {

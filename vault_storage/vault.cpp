@@ -5,6 +5,16 @@
 #include <string_view>
 #include <unistd.h>
 
+std::string vault::vaultNonceFile(const std::string &name) {
+  return "vault." + name + ".nonce";
+}
+
+std::pair<std::string, std::string>
+vault::vaultSaltFiles(const std::string &name) {
+  return std::make_pair("vault." + name + ".meta.salt.bin",
+                        "vault." + name + ".master.salt.bin");
+}
+
 VaultKeys vault::derive_keys_from_password(
     const SecureString &password,
     const std::array<std::byte, crypto_pwhash_SALTBYTES> &salt_meta,
@@ -52,10 +62,10 @@ void vault::Vault::save_metadata(const std::string &name) {
   SaltManager::saveToFile(meta_salt_, "vault." + name + ".meta.salt.bin");
 }
 
-std::expected<void, VaultError> vault::Vault::Add(const PasswordEntry &entry) {
+std::expected<void, VaultError> vault::Vault::Add(PasswordEntry &&entry) {
   if (locked_)
     return std::unexpected(VaultError::VaultLocked);
-  entries_.push_back(entry);
+  entries_.emplace_back(std::move(entry));
   return {};
 }
 
@@ -122,8 +132,10 @@ vault::Serializator::serialize(VaultKeys &&keys, const std::string &file_path,
 std::expected<void, VaultError>
 vault::Serializator::deserialize(VaultKeys &&keys, const std::string &path,
                                  Vault &vault) {
-  password_manager::VaultProto proto;
+  if (vault.locked_)
+    return std::unexpected(VaultError::VaultLocked);
 
+  password_manager::VaultProto proto;
   std::ifstream file(path, std::ios::binary);
 
   if (!file)
@@ -134,7 +146,6 @@ vault::Serializator::deserialize(VaultKeys &&keys, const std::string &path,
   file.seekg(0);
 
   std::vector<unsigned char> encrypted(size);
-
   file.read(reinterpret_cast<char *>(encrypted.data()), size);
 
   if (encrypted.size() < crypto_secretbox_MACBYTES)
@@ -154,32 +165,97 @@ vault::Serializator::deserialize(VaultKeys &&keys, const std::string &path,
   if (!proto.ParseFromString(decrypted))
     return std::unexpected(VaultError::IoError);
 
-  vault.entries_.clear();
-  for (const auto &e : proto.entries()) {
-    PasswordEntry entry;
+  // 🛡️ Временный буфер для транзакционности
+  std::vector<PasswordEntry> temp_entries;
+  temp_entries.reserve(proto.entries_size());
 
+  for (const auto &e : proto.entries()) {
+    // 🔍 Валидация размера Nonce перед memcpy
+    if (e.nonce().size() != crypto_secretbox_NONCEBYTES) {
+      return std::unexpected(VaultError::VaultCorrupted);
+    }
+
+    PasswordEntry entry;
     entry.id = e.id();
     entry.title = e.title();
     entry.login = e.login();
     entry.notes = e.notes();
 
     Nonce nonce;
-
     std::memcpy(nonce.data(), e.nonce().data(), crypto_secretbox_NONCEBYTES);
 
-    entry.password =
-        CryptoService::decypher(e.password(), nonce, keys.master_key);
+    entry.password = SecureString(
+        CryptoService::decypher(e.password(), nonce, keys.master_key));
 
-    if (!vault.Add(std::move(entry)).has_value())
-      return std::unexpected(VaultError::VaultLocked);
+    temp_entries.push_back(std::move(entry));
   }
+
+  // ✨ Атомарное обновление контейнера только при полном успехе
+  vault.entries_ = std::move(temp_entries);
 
   return {};
 }
 
-std::expected<void, VaultError> vault::Vault::unlock() {
-  locked_ = false;
-  return {};
+std::expected<void, VaultError>
+vault::Vault::unlock(const std::string &name, const SecureString &password) {
+  save_metadata(name);
+  auto [meta_salt_file, master_salt_file] = vault::vaultSaltFiles(name);
+  auto [meta_salt, master_salt] =
+      std::make_pair(SaltManager::getSaltFromFile(meta_salt_file),
+                     SaltManager::getSaltFromFile(master_salt_file));
+  auto nonce_file = vault::vaultNonceFile(name);
+  VaultKeys keys =
+      vault::derive_keys_from_password(password, *meta_salt, *master_salt);
+  vault::Vault tmp;
+  tmp.init();
+  tmp.load_metadata(meta_salt_file, master_salt_file, nonce_file);
+  tmp.locked_ = false;
+  if (vault::Serializator::deserialize(std::move(keys), name, tmp)
+          .has_value()) {
+    locked_ = false;
+    return {};
+  }
+  return std::unexpected(VaultError::WrongPassword);
 }
 
 void vault::Vault::lock() { locked_ = true; }
+
+std::expected<void, VaultError>
+vault::service::save(const SecureString &password, const std::string &name,
+                     Vault &vault) {
+  vault.save_metadata(name);
+  auto [meta_salt_path, master_salt_path] = vaultSaltFiles(name);
+  auto [meta_salt, master_salt] =
+      std::make_pair(SaltManager::getSaltFromFile(meta_salt_path),
+                     SaltManager::getSaltFromFile(master_salt_path));
+  if (!meta_salt.has_value() || !master_salt.has_value()) {
+    return std::unexpected(VaultError::SaltCorrupted);
+  }
+  auto nonce_file = vault::vaultNonceFile(name);
+
+  VaultKeys keys =
+      vault::derive_keys_from_password(password, *meta_salt, *master_salt);
+
+  vault.load_metadata(meta_salt_path, master_salt_path, nonce_file);
+  return vault::Serializator::serialize(std::move(keys), name, vault);
+}
+
+std::expected<void, VaultError>
+vault::service::load(const SecureString &password, const std::string &name,
+                     Vault &vault) {
+  auto [meta_salt_path, master_salt_path] = vaultSaltFiles(name);
+  auto [meta_salt, master_salt] =
+      std::make_pair(SaltManager::getSaltFromFile(meta_salt_path),
+                     SaltManager::getSaltFromFile(master_salt_path));
+
+  if (!meta_salt.has_value() || !master_salt.has_value()) {
+    return std::unexpected(VaultError::SaltCorrupted);
+  }
+  auto nonce_file = vault::vaultNonceFile(name);
+
+  VaultKeys keys =
+      vault::derive_keys_from_password(password, *meta_salt, *master_salt);
+
+  vault.load_metadata(meta_salt_path, master_salt_path, nonce_file);
+  return vault::Serializator::deserialize(std::move(keys), name, vault);
+}

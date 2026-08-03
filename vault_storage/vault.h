@@ -104,7 +104,7 @@ struct PasswordEntry {
   UUID id;
   std::string title;
   std::string login;
-  std::string password;
+  SecureString password{""};
   Nonce nonce;
   std::string notes;
 };
@@ -119,16 +119,22 @@ VaultKeys derive_keys_from_password(
     const SecureString &password,
     const std::array<std::byte, crypto_pwhash_SALTBYTES> &salt_meta,
     const std::array<std::byte, crypto_pwhash_SALTBYTES> &salt_pass);
+
+std::string vaultNonceFile(const std::string &name);
+
+std::pair<std::string, std::string> vaultSaltFiles(const std::string &name);
+
 class Vault {
   friend class Serializator;
 
 public:
-  std::expected<void, VaultError> Add(const PasswordEntry &entry);
+  std::expected<void, VaultError> Add(PasswordEntry &&entry);
   std::expected<void, VaultError> Remove(std::size_t index);
 
   const std::vector<PasswordEntry> &Entries() const;
 
-  [[nodiscard]] std::expected<void, VaultError> unlock();
+  [[nodiscard]] std::expected<void, VaultError>
+  unlock(const std::string &name, const SecureString &password);
 
   void lock();
 
@@ -160,4 +166,12 @@ public:
   deserialize(VaultKeys &&, const std::string &path, Vault &vault);
 };
 
+class service {
+public:
+  static std::expected<void, VaultError> save(const SecureString &,
+                                              const std::string &name, Vault &);
+
+  static std::expected<void, VaultError> load(const SecureString &,
+                                              const std::string &name, Vault &);
+};
 } // namespace vault

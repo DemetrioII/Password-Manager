@@ -7,13 +7,34 @@ PasswordForm::PasswordForm(QWidget *parent) {
   auto *central = new QWidget;
   auto *layout = new QVBoxLayout(central);
 
+  auto *titleLabel = new QLabel("Title:");
+  auto *passwordLabel = new QLabel("Password:");
+  auto *loginLabel = new QLabel("Login:");
+
   titleEdit = new QLineEdit;
   passwordEdit = new QLineEdit;
   loginEdit = new QLineEdit;
 
-  layout->addWidget(titleEdit);
-  layout->addWidget(loginEdit);
-  layout->addWidget(passwordEdit);
+  passwordEdit->setEchoMode(QLineEdit::Password);
+
+  auto *titleBox = new QHBoxLayout;
+  auto *loginBox = new QHBoxLayout;
+  auto *passwordBox = new QHBoxLayout;
+
+  titleBox->addWidget(titleLabel);
+  titleBox->addWidget(titleEdit);
+  loginBox->addWidget(loginLabel);
+  loginBox->addWidget(loginEdit);
+  passwordBox->addWidget(passwordLabel);
+  passwordBox->addWidget(passwordEdit);
+
+  titleLabel->setBuddy(titleEdit);
+  loginLabel->setBuddy(loginEdit);
+  passwordLabel->setBuddy(passwordEdit);
+
+  layout->addLayout(titleBox);
+  layout->addLayout(loginBox);
+  layout->addLayout(passwordBox);
 
   auto *buttons_layout = new QHBoxLayout;
 
@@ -35,6 +56,8 @@ SaveForm::SaveForm(QWidget *parent) {
   setWindowTitle("Please fill form to save your vault into the file");
   nameEdit = new QLineEdit;
   passwordEdit = new QLineEdit;
+
+  passwordEdit->setEchoMode(QLineEdit::Password);
 
   auto *sf_layout = new QVBoxLayout;
 
@@ -60,6 +83,8 @@ LoadForm::LoadForm(QWidget *parent) {
   setWindowTitle("Please fill form to load file into your file");
   nameEdit = new QLineEdit;
   passwordEdit = new QLineEdit;
+
+  passwordEdit->setEchoMode(QLineEdit::Password);
 
   auto *lf_layout = new QVBoxLayout;
 
@@ -116,9 +141,20 @@ MainWindow::MainWindow(vault::Vault &&vault, const std::string &name,
     if (form.exec() == QDialog::Accepted) {
       QString title = form.getTitle();
       QString login = form.getLogin();
-      QString password = form.getPassword();
-      passwords_->addItem(title + ": login='" + login + "', password='" +
-                          password + "'");
+      SecureString password{form.getPassword().toStdString()};
+      form.clearSensitiveFields();
+
+      PasswordEntry entry;
+      entry.title = title.toStdString();
+      entry.login = login.toStdString();
+
+      if (!vault_.Add(std::move(entry)).has_value()) {
+        qDebug() << "Sorry, vault is locked. You must unlock it first to add "
+                    "new entries";
+      } else {
+        qDebug() << "Successfully added new entry";
+        passwords_->addItem("title: " + title + ", login: " + login);
+      }
     }
   });
 
@@ -128,30 +164,13 @@ MainWindow::MainWindow(vault::Vault &&vault, const std::string &name,
     if (form.exec() == QDialog::Accepted) {
       std::string name = form.getName().toStdString();
       SecureString password{form.getPassword().toStdString()};
+      form.clearSensitiveFields();
 
-      vault_.save_metadata(name);
-      auto meta_salt =
-          *SaltManager::getSaltFromFile("vault." + name_ + ".meta.salt.bin");
-      auto master_salt =
-          *SaltManager::getSaltFromFile("vault." + name_ + ".master.salt.bin");
-      if (!vault::Serializator::deserialize(
-               vault::derive_keys_from_password(password, meta_salt,
-                                                master_salt),
-               name_, vault)
-               .has_value()) {
-        qDebug() << "Sorry, wrong password!";
+      if (!vault::service::save(password, name, vault_).has_value()) {
+        QMessageBox::critical(this, "error", "Unsuccessful serialization");
         return;
-      }
-      vault_.load_metadata("vault." + name_ + ".meta.salt.bin",
-                           "vault." + name_ + ".master.salt.bin",
-                           "vault." + name_ + ".nonce");
-      if (vault::Serializator::serialize(vault::derive_keys_from_password(
-                                             password, meta_salt, master_salt),
-                                         name, vault)
-              .has_value()) {
-        qDebug() << "Successfully serialized!\n";
       } else {
-        qDebug() << "Sorry, serialization failed!\n";
+        QMessageBox::information(this, "success", "Successfully serialized!");
       }
     }
   });
@@ -161,20 +180,16 @@ MainWindow::MainWindow(vault::Vault &&vault, const std::string &name,
     if (form.exec() == QDialog::Accepted) {
       std::string name = form.getName().toStdString();
       SecureString password{form.getPassword().toStdString()};
+      form.clearSensitiveFields();
 
-      auto meta_salt =
-          *SaltManager::getSaltFromFile("vault." + name + ".meta.salt.bin");
-      auto master_salt =
-          *SaltManager::getSaltFromFile("vault." + name + ".master.salt.bin");
-
-      if (vault::Serializator::deserialize(
-              vault::derive_keys_from_password(password, meta_salt,
-                                               master_salt),
-              name, vault)
-              .has_value()) {
-        qDebug() << "Successfully deserialized!\n";
+      if (!vault::service::load(password, name, vault_).has_value()) {
+        QMessageBox::critical(this, "error",
+                              "Deserialization was unsuccessful");
+        return;
       } else {
-        qDebug() << "Sorry, deserialization failed!\n";
+        QMessageBox::information(this, "success",
+                                 "Deserialization was successful");
+        return;
       }
     }
   });

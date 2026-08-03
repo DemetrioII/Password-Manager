@@ -16,6 +16,8 @@ public:
   QString getLogin() const { return loginEdit->text(); }
   QString getPassword() const { return passwordEdit->text(); }
 
+  void clearSensitiveFields() { passwordEdit->clear(); }
+
 signals:
   void dataSubmitted(QString title, QString login, QString password);
 
@@ -33,6 +35,8 @@ public:
   QString getName() { return nameEdit->text(); }
   QString getPassword() { return passwordEdit->text(); }
 
+  void clearSensitiveFields() { passwordEdit->clear(); }
+
 private:
   QLineEdit *nameEdit;
   QLineEdit *passwordEdit;
@@ -45,6 +49,8 @@ public:
 
   QString getName() { return nameEdit->text(); }
   QString getPassword() { return passwordEdit->text(); }
+
+  void clearSensitiveFields() { passwordEdit->clear(); }
 
 private:
   QLineEdit *nameEdit;

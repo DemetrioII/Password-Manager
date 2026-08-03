@@ -28,12 +28,11 @@ int main(int argc, char *argv[]) {
     }
 
     else if (command == "init") {
-      std::string master_password;
+      SecureString master_password{""};
       std::cout << "Enter your master password: ";
       std::cin >> master_password;
       vault.init();
-      vault.save_metadata("first");
-      vault.unlock();
+      vault.unlock("fuk", master_password);
     }
 
     else if (command == "save") {

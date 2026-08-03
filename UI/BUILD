@@ -1,4 +1,4 @@
-load("@rules_qt//qt:defs.bzl", "qt_cc_binary", "qt_cc_moc", "qt_cc_moc_import")
+load("@rules_qt//qt:defs.bzl", "qt_cc_binary", "qt_cc_moc", "qt_cc_moc_import", "qt_qrc", "qt_cc_rcc")
 
 qt_cc_moc(
 	name = "moc_hdrs",
@@ -12,6 +12,17 @@ qt_cc_moc_import(
 	],
 )
 
+qt_qrc(
+	name = "qrc",
+	srcs = [".qrc"],
+	data = ["dark.qss"],
+)
+
+qt_cc_rcc(
+	name = "resources",
+	srcs = [":qrc"],
+)
+
 qt_cc_binary(
     name = "UI",
     srcs = [
@@ -19,6 +30,7 @@ qt_cc_binary(
     ],
 	moc_hdrs = ["UI.hpp"],
 	moc_srcs = ["main.cpp"],
+	qrc_srcs = [":qrc"],
 	copts = [
 		"-std=c++23",
 	],

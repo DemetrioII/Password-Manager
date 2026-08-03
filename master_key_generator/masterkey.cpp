@@ -7,7 +7,7 @@ SecureString::SecureString(std::string_view data) {
   assign(data.data(), data.size());
 }
 
-std::string SecureString::view() const noexcept { return data_; }
+std::string_view SecureString::view() const noexcept { return data_; }
 
 std::size_t SecureString::size() const noexcept { return size_; }
 
@@ -21,7 +21,10 @@ SecureString &SecureString::operator=(SecureString &&other) noexcept {
   return *this;
 }
 
-SecureString::~SecureString() { sodium_memzero(data_, size_); }
+SecureString::~SecureString() {
+  sodium_memzero(data_, size_);
+  sodium_free(data_);
+}
 
 std::span<std::byte> Key::bytes() noexcept { return data_; }
 

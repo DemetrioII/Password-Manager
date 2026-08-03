@@ -46,7 +46,7 @@ public:
     size_ = 0;
   }
 
-  [[nodiscard]] const char *data() const noexcept { return data_; }
+  [[nodiscard]] char *data() const noexcept { return data_; }
 
   [[nodiscard]] bool empty() const noexcept { return size_ == 0; }
 
@@ -61,7 +61,7 @@ public:
 
   ~SecureString();
 
-  std::string view() const noexcept;
+  std::string_view view() const noexcept;
 
   std::size_t size() const noexcept;
 
@@ -174,7 +174,7 @@ class NonceManager {
 public:
   static Nonce generate() {
     Nonce nonce;
-    randombytes_buf(nonce.data(), sizeof nonce.data());
+    randombytes_buf(nonce.data(), nonce.size());
     return nonce;
   }
 

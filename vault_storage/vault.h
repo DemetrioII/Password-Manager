@@ -133,11 +133,6 @@ public:
 
   const std::vector<PasswordEntry> &Entries() const;
 
-  [[nodiscard]] std::expected<void, VaultError>
-  unlock(const std::string &name, const SecureString &password);
-
-  void lock();
-
   Vault() = default;
 
   void load_metadata(const std::string &salt_meta_file,

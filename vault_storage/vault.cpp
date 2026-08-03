@@ -184,8 +184,8 @@ vault::Serializator::deserialize(VaultKeys &&keys, const std::string &path,
     Nonce nonce;
     std::memcpy(nonce.data(), e.nonce().data(), crypto_secretbox_NONCEBYTES);
 
-    entry.password = SecureString(
-        CryptoService::decypher(e.password(), nonce, keys.master_key));
+    entry.password = CryptoService::decypher(SecureString{e.password()}, nonce,
+                                             keys.master_key);
 
     temp_entries.push_back(std::move(entry));
   }
@@ -195,30 +195,6 @@ vault::Serializator::deserialize(VaultKeys &&keys, const std::string &path,
 
   return {};
 }
-
-std::expected<void, VaultError>
-vault::Vault::unlock(const std::string &name, const SecureString &password) {
-  save_metadata(name);
-  auto [meta_salt_file, master_salt_file] = vault::vaultSaltFiles(name);
-  auto [meta_salt, master_salt] =
-      std::make_pair(SaltManager::getSaltFromFile(meta_salt_file),
-                     SaltManager::getSaltFromFile(master_salt_file));
-  auto nonce_file = vault::vaultNonceFile(name);
-  VaultKeys keys =
-      vault::derive_keys_from_password(password, *meta_salt, *master_salt);
-  vault::Vault tmp;
-  tmp.init();
-  tmp.load_metadata(meta_salt_file, master_salt_file, nonce_file);
-  tmp.locked_ = false;
-  if (vault::Serializator::deserialize(std::move(keys), name, tmp)
-          .has_value()) {
-    locked_ = false;
-    return {};
-  }
-  return std::unexpected(VaultError::WrongPassword);
-}
-
-void vault::Vault::lock() { locked_ = true; }
 
 std::expected<void, VaultError>
 vault::service::save(const SecureString &password, const std::string &name,

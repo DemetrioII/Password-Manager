@@ -21,8 +21,7 @@ int main(int argc, char *argv[]) {
 
       PasswordEntry entry;
       entry.login = login;
-      entry.password = password;
-      if (!vault.Add(entry).has_value()) {
+      if (!vault.Add(std::move(entry)).has_value()) {
         std::cerr << "Error!" << std::endl;
       }
     }
@@ -32,7 +31,6 @@ int main(int argc, char *argv[]) {
       std::cout << "Enter your master password: ";
       std::cin >> master_password;
       vault.init();
-      vault.unlock("fuk", master_password);
     }
 
     else if (command == "save") {
@@ -81,8 +79,8 @@ int main(int argc, char *argv[]) {
       }
     } else if (command == "list") {
       for (const auto &e : vault.Entries()) {
-        std::cout << "login: " << e.login << ", your password: '" << e.password
-                  << "'" << std::endl;
+        std::cout << "login: " << e.login << ", your password: '"
+                  << e.password.view() << "'" << std::endl;
       }
     }
   }

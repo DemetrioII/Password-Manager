@@ -7,7 +7,9 @@ SecureString::SecureString(std::string_view data) {
   assign(data.data(), data.size());
 }
 
-std::string_view SecureString::view() const noexcept { return data_; }
+std::string_view SecureString::view() const noexcept {
+  return std::string_view{data_, size_};
+}
 
 std::size_t SecureString::size() const noexcept { return size_; }
 
@@ -16,14 +18,22 @@ SecureString::SecureString(SecureString &&other) noexcept
       size_(std::exchange(other.size_, 0)) {}
 
 SecureString &SecureString::operator=(SecureString &&other) noexcept {
-  data_ = std::move(other.data_);
-  size_ = std::move(other.size_);
+  if (this != &other) {
+    if (data_) {
+      sodium_memzero(data_, size_);
+      delete[] data_;
+    }
+    data_ = std::exchange(other.data_, nullptr);
+    size_ = std::exchange(other.size_, 0);
+  }
   return *this;
 }
 
 SecureString::~SecureString() {
-  sodium_memzero(data_, size_);
-  sodium_free(data_);
+  if (data_) {
+    sodium_memzero(data_, size_);
+    sodium_free(data_);
+  }
 }
 
 std::span<std::byte> Key::bytes() noexcept { return data_; }

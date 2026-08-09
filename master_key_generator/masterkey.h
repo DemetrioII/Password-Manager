@@ -46,7 +46,9 @@ public:
     size_ = 0;
   }
 
-  [[nodiscard]] char *data() const noexcept { return data_; }
+  [[nodiscard]] const char *data() const noexcept { return data_; }
+
+  char *data() noexcept { return data_; }
 
   [[nodiscard]] bool empty() const noexcept { return size_ == 0; }
 

@@ -5,12 +5,8 @@ int main(int argc, char *argv[]) {
   if (sodium_init() < 0)
     return 1;
 
-  std::string name;
-  std::cout << "Enter name: ";
-  std::cin >> name;
   vault::Vault vault;
   vault.init();
-  vault.save_metadata(name);
   QApplication app(argc, argv);
 
   QFile file(":/dark.qss");
@@ -22,7 +18,7 @@ int main(int argc, char *argv[]) {
 
   app.setStyleSheet(QString::fromUtf8(file.readAll()));
 
-  MainWindow window(std::move(vault), name);
+  MainWindow window(std::move(vault));
   window.show();
   return app.exec();
 }

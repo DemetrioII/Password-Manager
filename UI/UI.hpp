@@ -7,6 +7,21 @@
 #include <QVBoxLayout>
 #include <QtWidgets>
 
+class PasswordItemWidget : public QWidget {
+public:
+  explicit PasswordItemWidget(const PasswordEntry &entry, int ID,
+                              QWidget *parent = nullptr);
+
+  int get_id() const;
+
+private:
+  QLabel *titleLabel_;
+  QLabel *loginLabel_;
+  QLineEdit *passwordEdit_;
+  QToolButton *showButton_;
+  int id_;
+};
+
 class PasswordForm : public QDialog {
   Q_OBJECT
 public:
@@ -60,14 +75,14 @@ private:
 class MainWindow : public QMainWindow {
   Q_OBJECT
 public:
-  MainWindow(vault::Vault &&vault, const std::string &name,
-             QWidget *parent = nullptr);
+  MainWindow(vault::Vault &&vault, QWidget *parent = nullptr);
   ~MainWindow() override;
+
+  void refreshPasswordList();
 
 private:
   QListWidget *passwords_;
   QLineEdit *search_;
 
   vault::Vault vault_;
-  std::string name_;
 };

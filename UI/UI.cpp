@@ -1,15 +1,51 @@
 #include "UI.hpp"
 
-PasswordForm::PasswordForm(QWidget *parent) {
+PasswordItemWidget::PasswordItemWidget(const PasswordEntry &entry, int ID,
+                                       QWidget *parent)
+    : QWidget(parent), id_(ID) {
+  titleLabel_ = new QLabel(QString::fromStdString(entry.title));
+  loginLabel_ = new QLabel(QString::fromStdString(entry.login));
+
+  passwordEdit_ = new QLineEdit;
+  passwordEdit_->setReadOnly(true);
+  passwordEdit_->setEchoMode(QLineEdit::Password);
+
+  showButton_ = new QToolButton;
+  showButton_->setText("👁");
+  showButton_->setCheckable(true);
+
+  auto *layout = new QVBoxLayout(this);
+
+  auto *topLayout = new QHBoxLayout;
+  topLayout->addWidget(titleLabel_);
+  topLayout->addStretch();
+  topLayout->addWidget(showButton_);
+
+  layout->addLayout(topLayout);
+  layout->addWidget(loginLabel_);
+  layout->addWidget(passwordEdit_);
+
+  QObject::connect(showButton_, &QToolButton::toggled, this,
+                   [this, &entry](bool visible) {
+                     if (visible) {
+                       const auto view = entry.password.view();
+
+                       passwordEdit_->setText(QString::fromUtf8(
+                           view.data(), static_cast<qsizetype>(view.size())));
+                     } else {
+                       passwordEdit_->clear();
+                     }
+
+                     passwordEdit_->setEchoMode(visible ? QLineEdit::Normal
+                                                        : QLineEdit::Password);
+                   });
+}
+
+int PasswordItemWidget::get_id() const { return id_; }
+
+PasswordForm::PasswordForm(QWidget *parent) : QDialog(parent) {
   setWindowTitle("Please fill the form of your new password");
   resize(500, 300);
-
-  auto *central = new QWidget;
-  auto *layout = new QVBoxLayout(central);
-
-  auto *titleLabel = new QLabel("Title:");
-  auto *passwordLabel = new QLabel("Password:");
-  auto *loginLabel = new QLabel("Login:");
 
   titleEdit = new QLineEdit;
   passwordEdit = new QLineEdit;
@@ -17,105 +53,85 @@ PasswordForm::PasswordForm(QWidget *parent) {
 
   passwordEdit->setEchoMode(QLineEdit::Password);
 
-  auto *titleBox = new QHBoxLayout;
-  auto *loginBox = new QHBoxLayout;
-  auto *passwordBox = new QHBoxLayout;
+  QFormLayout *layout = new QFormLayout;
+  layout->addRow("Title:", titleEdit);
+  layout->addRow("Login:", loginEdit);
+  layout->addRow("Password:", passwordEdit);
 
-  titleBox->addWidget(titleLabel);
-  titleBox->addWidget(titleEdit);
-  loginBox->addWidget(loginLabel);
-  loginBox->addWidget(loginEdit);
-  passwordBox->addWidget(passwordLabel);
-  passwordBox->addWidget(passwordEdit);
+  QDialogButtonBox *buttonBox =
+      new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
 
-  titleLabel->setBuddy(titleEdit);
-  loginLabel->setBuddy(loginEdit);
-  passwordLabel->setBuddy(passwordEdit);
+  QObject::connect(buttonBox, &QDialogButtonBox::accepted, this,
+                   &QDialog::accept);
 
-  layout->addLayout(titleBox);
-  layout->addLayout(loginBox);
-  layout->addLayout(passwordBox);
+  QObject::connect(buttonBox, &QDialogButtonBox::rejected, this,
+                   &QDialog::reject);
 
-  auto *buttons_layout = new QHBoxLayout;
-
-  QPushButton *okButton = new QPushButton("OK", this);
-  QPushButton *cancelButton = new QPushButton("Cancel", this);
-
-  connect(okButton, &QPushButton::clicked, this, &QDialog::accept);
-  connect(cancelButton, &QPushButton::clicked, this, &QDialog::reject);
-
-  buttons_layout->addWidget(okButton);
-  buttons_layout->addWidget(cancelButton);
-
-  layout->addLayout(buttons_layout);
+  layout->addRow(buttonBox);
 
   setLayout(layout);
 }
 
-SaveForm::SaveForm(QWidget *parent) {
+SaveForm::SaveForm(QWidget *parent) : QDialog(parent) {
   setWindowTitle("Please fill form to save your vault into the file");
   nameEdit = new QLineEdit;
   passwordEdit = new QLineEdit;
 
   passwordEdit->setEchoMode(QLineEdit::Password);
 
-  auto *sf_layout = new QVBoxLayout;
+  auto *layout = new QFormLayout;
 
-  sf_layout->addWidget(nameEdit);
-  sf_layout->addWidget(passwordEdit);
+  layout->addRow("Name:", nameEdit);
+  layout->addRow("Password:", passwordEdit);
 
-  QPushButton *okButton = new QPushButton("OK", this);
-  QPushButton *cancelButton = new QPushButton("Cancel", this);
+  auto *buttonBox =
+      new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
 
-  connect(okButton, &QPushButton::clicked, this, &QDialog::accept);
-  connect(cancelButton, &QPushButton::clicked, this, &QDialog::reject);
+  QObject::connect(buttonBox, &QDialogButtonBox::accepted, this,
+                   &QDialog::accept);
 
-  QHBoxLayout *buttons_layout = new QHBoxLayout;
-  buttons_layout->addWidget(okButton);
-  buttons_layout->addWidget(cancelButton);
+  QObject::connect(buttonBox, &QDialogButtonBox::rejected, this,
+                   &QDialog::reject);
 
-  sf_layout->addLayout(buttons_layout);
-
-  setLayout(sf_layout);
+  layout->addRow(buttonBox);
+  setLayout(layout);
 }
 
-LoadForm::LoadForm(QWidget *parent) {
+LoadForm::LoadForm(QWidget *parent) : QDialog(parent) {
   setWindowTitle("Please fill form to load file into your file");
   nameEdit = new QLineEdit;
   passwordEdit = new QLineEdit;
 
   passwordEdit->setEchoMode(QLineEdit::Password);
 
-  auto *lf_layout = new QVBoxLayout;
+  auto *layout = new QFormLayout;
 
-  lf_layout->addWidget(nameEdit);
-  lf_layout->addWidget(passwordEdit);
+  layout->addRow("Name:", nameEdit);
+  layout->addRow("Password:", passwordEdit);
 
-  QPushButton *okButton = new QPushButton("OK", this);
-  QPushButton *cancelButton = new QPushButton("Cancel", this);
+  QDialogButtonBox *buttonBox =
+      new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
 
-  connect(okButton, &QPushButton::clicked, this, &QDialog::accept);
-  connect(cancelButton, &QPushButton::clicked, this, &QDialog::reject);
+  QObject::connect(buttonBox, &QDialogButtonBox::accepted, this,
+                   &QDialog::accept);
 
-  QHBoxLayout *buttons_layout = new QHBoxLayout;
-  buttons_layout->addWidget(okButton);
-  buttons_layout->addWidget(cancelButton);
+  QObject::connect(buttonBox, &QDialogButtonBox::rejected, this,
+                   &QDialog::reject);
 
-  lf_layout->addLayout(buttons_layout);
-  setLayout(lf_layout);
+  layout->addRow(buttonBox);
+  setLayout(layout);
 }
 
-MainWindow::MainWindow(vault::Vault &&vault, const std::string &name,
-                       QWidget *parent)
-    : vault_(std::move(vault)), name_(name) {
+MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
+    : vault_(std::move(vault)) {
   setWindowTitle("Password Manager");
   resize(900, 600);
 
   auto *toolbar = addToolBar("Main");
 
-  auto *plusAction = toolbar->addAction("+");
-  toolbar->addAction("-");
-  toolbar->addAction("Lock");
+  auto *addAction = toolbar->addAction("+");
+  auto *deleteAction = toolbar->addAction("-");
+  auto *editAction = toolbar->addAction("Edit");
   auto *saveAction = toolbar->addAction("Save");
   auto *loadAction = toolbar->addAction("Load");
 
@@ -133,9 +149,7 @@ MainWindow::MainWindow(vault::Vault &&vault, const std::string &name,
 
   setCentralWidget(central);
 
-  statusBar()->showMessage("Vault locked");
-
-  QObject::connect(plusAction, &QAction::triggered, this, [&]() {
+  QObject::connect(addAction, &QAction::triggered, this, [&]() {
     PasswordForm form(this);
 
     if (form.exec() == QDialog::Accepted) {
@@ -147,15 +161,38 @@ MainWindow::MainWindow(vault::Vault &&vault, const std::string &name,
       PasswordEntry entry;
       entry.title = title.toStdString();
       entry.login = login.toStdString();
+      entry.password = std::move(password);
 
       if (!vault_.Add(std::move(entry)).has_value()) {
         qDebug() << "Sorry, vault is locked. You must unlock it first to add "
                     "new entries";
       } else {
         qDebug() << "Successfully added new entry";
-        passwords_->addItem("title: " + title + ", login: " + login);
+        refreshPasswordList();
       }
     }
+  });
+
+  QObject::connect(deleteAction, &QAction::triggered, this, [&]() {
+    auto *item = passwords_->currentItem();
+
+    int idx = ((PasswordItemWidget *)item)->get_id();
+
+    if (!item) {
+      return;
+    }
+
+    if (vault_.Remove(idx).has_value()) {
+      refreshPasswordList();
+    } else {
+      QMessageBox::critical(this, "error", "Unsuccessful attempt of deletion");
+    }
+  });
+
+  QObject::connect(editAction, &QAction::triggered, this, [&]() {
+    auto *item = passwords_->currentItem();
+
+    int idx = ((PasswordItemWidget *)item)->get_id();
   });
 
   QObject::connect(saveAction, &QAction::triggered, this, [&]() {
@@ -189,10 +226,25 @@ MainWindow::MainWindow(vault::Vault &&vault, const std::string &name,
       } else {
         QMessageBox::information(this, "success",
                                  "Deserialization was successful");
+        refreshPasswordList();
         return;
       }
     }
   });
+}
+
+void MainWindow::refreshPasswordList() {
+  passwords_->clear();
+
+  for (const auto &entry : vault_.Entries()) {
+    auto *item = new QListWidgetItem(passwords_);
+    auto *widget = new PasswordItemWidget(entry, passwords_->count());
+
+    item->setSizeHint(widget->sizeHint());
+
+    passwords_->addItem(item);
+    passwords_->setItemWidget(item, widget);
+  }
 }
 
 MainWindow::~MainWindow() = default;

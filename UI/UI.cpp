@@ -293,7 +293,6 @@ void MainWindow::refreshPasswordList() {
     item->setData(Qt::UserRole, passwords_->count() - 1);
     item->setSizeHint(widget->sizeHint());
 
-    passwords_->addItem(item);
     passwords_->setItemWidget(item, widget);
   }
 }

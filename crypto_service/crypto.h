@@ -14,9 +14,9 @@ enum class CryptoError {
 
 class CryptoService {
 public:
-  static SecureString cypher(const SecureString &password, Nonce &nonce,
+  static SecureString cypher(const SecureString &password, const Nonce &nonce,
                              const Key &key);
 
-  static SecureString decypher(const SecureString &password, Nonce &nonce,
+  static SecureString decypher(const SecureString &password, const Nonce &nonce,
                                const Key &key);
 };

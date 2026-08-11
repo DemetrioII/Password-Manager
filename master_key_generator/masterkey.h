@@ -96,6 +96,7 @@ public:
   Key(Key &&other) noexcept : data_(other.data_) {
     sodium_memzero(other.data_.data(), other.data_.size());
     sodium_mlock(data_.data(), data_.size());
+    sodium_munlock(other.data_.data(), other.data_.size());
   }
 
   Key &operator=(Key &&other) noexcept {

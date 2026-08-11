@@ -2,8 +2,7 @@
 
 SecureString CryptoService::cypher(const SecureString &password, Nonce &nonce,
                                    const Key &key) {
-  SecureString ciphertext{
-      std::string(password.size() + crypto_secretbox_MACBYTES, '\0')};
+  SecureString ciphertext{password.size() + crypto_secretbox_MACBYTES};
 
   if (crypto_secretbox_easy(
           reinterpret_cast<unsigned char *>(ciphertext.data()),
@@ -23,8 +22,7 @@ SecureString CryptoService::decypher(const SecureString &ciphertext,
     throw std::runtime_error("ciphertext is too short");
   }
 
-  SecureString password{
-      std::string(ciphertext.size() - crypto_secretbox_MACBYTES, '\0')};
+  SecureString password{ciphertext.size() - crypto_secretbox_MACBYTES};
 
   if (crypto_secretbox_open_easy(
           reinterpret_cast<unsigned char *>(password.data()),

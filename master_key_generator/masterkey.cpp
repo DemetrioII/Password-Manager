@@ -7,6 +7,13 @@ SecureString::SecureString(std::string_view data) {
   assign(data.data(), data.size());
 }
 
+SecureString::SecureString(std::size_t size) {
+  data_ = static_cast<char *>(sodium_malloc(size));
+  if (!data_)
+    throw std::bad_alloc();
+  size_ = size;
+}
+
 std::string_view SecureString::view() const noexcept {
   return std::string_view{data_, size_};
 }
@@ -21,7 +28,7 @@ SecureString &SecureString::operator=(SecureString &&other) noexcept {
   if (this != &other) {
     if (data_) {
       sodium_memzero(data_, size_);
-      delete[] data_;
+      sodium_free(data_);
     }
     data_ = std::exchange(other.data_, nullptr);
     size_ = std::exchange(other.size_, 0);

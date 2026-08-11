@@ -17,6 +17,7 @@ enum class KeyManagerError {
 class SecureString {
 public:
   explicit SecureString(std::string_view data);
+  explicit SecureString(std::size_t size);
 
   SecureString(const SecureString &) = delete;
   SecureString &operator=(const SecureString &) = delete;

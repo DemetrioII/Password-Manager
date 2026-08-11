@@ -8,6 +8,7 @@
 #include <QtWidgets>
 
 class PasswordItemWidget : public QWidget {
+  Q_OBJECT
 public:
   explicit PasswordItemWidget(const PasswordEntry &entry, int ID,
                               QWidget *parent = nullptr);
@@ -25,7 +26,9 @@ private:
 class PasswordForm : public QDialog {
   Q_OBJECT
 public:
-  PasswordForm(QWidget *parent = nullptr);
+  explicit PasswordForm(QWidget *parent = nullptr);
+
+  explicit PasswordForm(const PasswordEntry &entry, QWidget *parent);
 
   QString getTitle() const { return titleEdit->text(); }
   QString getLogin() const { return loginEdit->text(); }

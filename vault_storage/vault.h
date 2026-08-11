@@ -92,6 +92,7 @@ public:
 
 private:
   static void sync_directory(const std::filesystem::path &dir_path) {
+    auto path_to_open = dir_path.empty() ? "." : dir_path;
     int dir_fd = ::open(dir_path.c_str(), O_RDONLY | O_DIRECTORY);
     if (dir_fd != -1) {
       ::fsync(dir_fd);

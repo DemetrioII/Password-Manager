@@ -72,6 +72,39 @@ PasswordForm::PasswordForm(QWidget *parent) : QDialog(parent) {
   setLayout(layout);
 }
 
+PasswordForm::PasswordForm(const PasswordEntry &entry, QWidget *parent)
+    : QDialog(parent) {
+  titleEdit = new QLineEdit;
+  loginEdit = new QLineEdit;
+  passwordEdit = new QLineEdit;
+  passwordEdit->setEchoMode(QLineEdit::Password);
+
+  titleEdit->setText(QString::fromStdString(entry.title));
+  loginEdit->setText(QString::fromStdString(entry.login));
+
+  const auto password = entry.password.view();
+
+  passwordEdit->setText(QString::fromUtf8(
+      password.data(), static_cast<qsizetype>(password.size())));
+
+  QFormLayout *layout = new QFormLayout;
+  layout->addRow("Title:", titleEdit);
+  layout->addRow("Login:", loginEdit);
+  layout->addRow("Password:", passwordEdit);
+
+  QDialogButtonBox *buttonBox =
+      new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+
+  QObject::connect(buttonBox, &QDialogButtonBox::accepted, this,
+                   &QDialog::accept);
+
+  QObject::connect(buttonBox, &QDialogButtonBox::rejected, this,
+                   &QDialog::reject);
+
+  layout->addRow(buttonBox);
+  setLayout(layout);
+}
+
 SaveForm::SaveForm(QWidget *parent) : QDialog(parent) {
   setWindowTitle("Please fill form to save your vault into the file");
   nameEdit = new QLineEdit;
@@ -176,12 +209,17 @@ MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
   QObject::connect(deleteAction, &QAction::triggered, this, [&]() {
     auto *item = passwords_->currentItem();
 
-    int idx = ((PasswordItemWidget *)item)->get_id();
-
     if (!item) {
       return;
     }
 
+    auto *widget =
+        qobject_cast<PasswordItemWidget *>(passwords_->itemWidget(item));
+
+    if (!widget)
+      return;
+    widget->get_id();
+    int idx = widget->get_id();
     if (vault_.Remove(idx).has_value()) {
       refreshPasswordList();
     } else {
@@ -192,7 +230,19 @@ MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
   QObject::connect(editAction, &QAction::triggered, this, [&]() {
     auto *item = passwords_->currentItem();
 
-    int idx = ((PasswordItemWidget *)item)->get_id();
+    const int idx = item->data(Qt::UserRole).toInt();
+
+    qDebug() << idx;
+    PasswordForm form(vault_.Entries()[idx], this);
+    if (form.exec() == QDialog::Accepted) {
+      vault_.Remove(idx);
+      vault_.Add({.title = form.getTitle().toStdString(),
+                  .login = form.getLogin().toStdString(),
+                  .password = SecureString{form.getPassword().toStdString()}});
+      refreshPasswordList();
+      form.clearSensitiveFields();
+      QMessageBox::information(this, "info", "Entry was successfully updated!");
+    }
   });
 
   QObject::connect(saveAction, &QAction::triggered, this, [&]() {
@@ -238,8 +288,9 @@ void MainWindow::refreshPasswordList() {
 
   for (const auto &entry : vault_.Entries()) {
     auto *item = new QListWidgetItem(passwords_);
-    auto *widget = new PasswordItemWidget(entry, passwords_->count());
+    auto *widget = new PasswordItemWidget(entry, passwords_->count() - 1);
 
+    item->setData(Qt::UserRole, passwords_->count() - 1);
     item->setSizeHint(widget->sizeHint());
 
     passwords_->addItem(item);

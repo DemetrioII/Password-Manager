@@ -10,7 +10,8 @@
 class PasswordItemWidget : public QWidget {
   Q_OBJECT
 public:
-  explicit PasswordItemWidget(const PasswordEntry &entry, int ID,
+  explicit PasswordItemWidget(const PasswordEntry &entry,
+                              const EphemeralKey &session_key, int ID,
                               QWidget *parent = nullptr);
 
   int get_id() const;
@@ -28,7 +29,8 @@ class PasswordForm : public QDialog {
 public:
   explicit PasswordForm(QWidget *parent = nullptr);
 
-  explicit PasswordForm(const PasswordEntry &entry, QWidget *parent);
+  explicit PasswordForm(const PasswordEntry &entry,
+                        const EphemeralKey &session_key, QWidget *parent);
 
   QString getTitle() const { return titleEdit->text(); }
   QString getLogin() const { return loginEdit->text(); }
@@ -87,5 +89,6 @@ private:
   QListWidget *passwords_;
   QLineEdit *search_;
 
+  EphemeralKey session_key_;
   vault::Vault vault_;
 };

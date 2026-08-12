@@ -105,7 +105,7 @@ struct PasswordEntry {
   UUID id;
   std::string title;
   std::string login;
-  SecureString password{""};
+  EncryptedField password;
   Nonce nonce;
   std::string notes;
 };
@@ -156,18 +156,22 @@ class Serializator {
 public:
   [[nodiscard]]
   static std::expected<void, VaultError>
-  serialize(VaultKeys &&, const std::string &file_path, const Vault &vault);
+  serialize(VaultKeys &&, const EphemeralKey &session_key,
+            const std::string &file_path, const Vault &vault);
   [[nodiscard]]
   static std::expected<void, VaultError>
-  deserialize(VaultKeys &&, const std::string &path, Vault &vault);
+  deserialize(VaultKeys &&, const EphemeralKey &session_key,
+              const std::string &path, Vault &vault);
 };
 
 class service {
 public:
   static std::expected<void, VaultError> save(const SecureString &,
+                                              const EphemeralKey &session_key,
                                               const std::string &name, Vault &);
 
   static std::expected<void, VaultError> load(const SecureString &,
+                                              const EphemeralKey &session_key,
                                               const std::string &name, Vault &);
 };
 } // namespace vault

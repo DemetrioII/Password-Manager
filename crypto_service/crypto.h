@@ -1,4 +1,6 @@
 #pragma once
+#include "master_key_generator/encryptedfield.h"
+#include "master_key_generator/ephemeralkey.h"
 #include "master_key_generator/masterkey.h"
 #include <exception>
 #include <iostream>

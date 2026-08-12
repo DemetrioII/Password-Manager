@@ -12,5 +12,6 @@ message PasswordEntryProto {
 }
 
 message VaultProto {
-  repeated PasswordEntryProto entries = 1;
+  bytes nonce = 1;
+  repeated PasswordEntryProto entries = 2;
 }

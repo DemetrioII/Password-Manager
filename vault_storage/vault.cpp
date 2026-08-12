@@ -1,4 +1,5 @@
 #include "vault.h"
+#include <algorithm>
 #include <fcntl.h>
 #include <fstream>
 #include <string>
@@ -80,10 +81,13 @@ const std::vector<PasswordEntry> &vault::Vault::Entries() const {
   return entries_;
 }
 
-std::expected<void, VaultError>
-vault::Serializator::serialize(VaultKeys &&keys, const std::string &file_path,
-                               const Vault &vault) {
+std::expected<void, VaultError> vault::Serializator::serialize(
+    VaultKeys &&keys, const EphemeralKey &session_key,
+    const std::string &file_path, const Vault &vault) {
   password_manager::VaultProto proto;
+
+  proto.set_nonce(reinterpret_cast<const unsigned char *>(vault.nonce_.data()),
+                  vault.nonce_.size());
 
   for (const auto &entry : vault.Entries()) {
     auto *e = proto.add_entries();
@@ -94,8 +98,8 @@ vault::Serializator::serialize(VaultKeys &&keys, const std::string &file_path,
 
     Nonce nonce = NonceManager::generate();
 
-    auto ciphertext =
-        CryptoService::cypher(entry.password, nonce, keys.master_key);
+    auto ciphertext = CryptoService::cypher(entry.password.decrypt(session_key),
+                                            nonce, keys.master_key);
 
     e->set_nonce(reinterpret_cast<const char *>(nonce.data()), nonce.size());
 
@@ -130,8 +134,9 @@ vault::Serializator::serialize(VaultKeys &&keys, const std::string &file_path,
 }
 
 std::expected<void, VaultError>
-vault::Serializator::deserialize(VaultKeys &&keys, const std::string &path,
-                                 Vault &vault) {
+vault::Serializator::deserialize(VaultKeys &&keys,
+                                 const EphemeralKey &session_key,
+                                 const std::string &path, Vault &vault) {
   if (vault.locked_)
     return std::unexpected(VaultError::VaultLocked);
 
@@ -184,8 +189,11 @@ vault::Serializator::deserialize(VaultKeys &&keys, const std::string &path,
     Nonce nonce;
     std::memcpy(nonce.data(), e.nonce().data(), crypto_secretbox_NONCEBYTES);
 
-    entry.password = CryptoService::decypher(SecureString{e.password()}, nonce,
-                                             keys.master_key);
+    entry.password = EncryptedField::encrypt(
+        CryptoService::decypher(SecureString{e.password()}, nonce,
+                                keys.master_key)
+            .view(),
+        session_key);
 
     temp_entries.push_back(std::move(entry));
   }
@@ -197,7 +205,8 @@ vault::Serializator::deserialize(VaultKeys &&keys, const std::string &path,
 }
 
 std::expected<void, VaultError>
-vault::service::save(const SecureString &password, const std::string &name,
+vault::service::save(const SecureString &password,
+                     const EphemeralKey &session_key, const std::string &name,
                      Vault &vault) {
   vault.save_metadata(name);
   auto [meta_salt_path, master_salt_path] = vaultSaltFiles(name);
@@ -213,11 +222,13 @@ vault::service::save(const SecureString &password, const std::string &name,
       vault::derive_keys_from_password(password, *meta_salt, *master_salt);
 
   vault.load_metadata(meta_salt_path, master_salt_path, nonce_file);
-  return vault::Serializator::serialize(std::move(keys), name, vault);
+  return vault::Serializator::serialize(std::move(keys), session_key, name,
+                                        vault);
 }
 
 std::expected<void, VaultError>
-vault::service::load(const SecureString &password, const std::string &name,
+vault::service::load(const SecureString &password,
+                     const EphemeralKey &session_key, const std::string &name,
                      Vault &vault) {
   auto [meta_salt_path, master_salt_path] = vaultSaltFiles(name);
   auto [meta_salt, master_salt] =
@@ -233,5 +244,6 @@ vault::service::load(const SecureString &password, const std::string &name,
       vault::derive_keys_from_password(password, *meta_salt, *master_salt);
 
   vault.load_metadata(meta_salt_path, master_salt_path, nonce_file);
-  return vault::Serializator::deserialize(std::move(keys), name, vault);
+  return vault::Serializator::deserialize(std::move(keys), session_key, name,
+                                          vault);
 }

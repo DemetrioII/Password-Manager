@@ -3,7 +3,7 @@
 
 SecureString EncryptedField::decrypt(const EphemeralKey &session_key) const {
   if (ciphertext.size() < crypto_secretbox_MACBYTES) {
-    return SecureString{""};
+    throw std::runtime_error("Invalid ciphertext");
   }
 
   SecureString plain_text{ciphertext.size() - crypto_secretbox_MACBYTES};

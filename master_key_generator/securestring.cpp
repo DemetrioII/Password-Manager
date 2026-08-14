@@ -5,6 +5,9 @@ SecureString::SecureString(std::string_view data) {
 }
 
 SecureString::SecureString(std::size_t size) {
+  if (size == 0)
+    return;
+
   data_ = static_cast<char *>(sodium_malloc(size));
   if (!data_)
     throw std::bad_alloc();

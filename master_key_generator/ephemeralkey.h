@@ -12,8 +12,8 @@ public:
   EphemeralKey(const EphemeralKey &) = delete;
   EphemeralKey &operator=(const EphemeralKey &) = delete;
 
-  EphemeralKey(EphemeralKey &&other);
-  EphemeralKey &operator=(EphemeralKey &&other);
+  EphemeralKey(EphemeralKey &&other) noexcept;
+  EphemeralKey &operator=(EphemeralKey &&other) noexcept;
 
   [[nodiscard]] const unsigned char *data() const noexcept;
 

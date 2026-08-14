@@ -30,10 +30,15 @@ public:
   static std::expected<Nonce, KeyManagerError>
   read_from_file(const std::string &file_path) {
     Nonce nonce;
-    try {
-      std::ifstream nonce_file(file_path, std::ios::binary);
-      nonce_file.read(reinterpret_cast<char *>(nonce.data()), nonce.size());
-    } catch (std::exception &e) {
+    std::ifstream nonce_file(file_path, std::ios::binary);
+
+    if (!nonce_file) {
+      return std::unexpected(KeyManagerError::FileNotFound);
+    }
+
+    nonce_file.read(reinterpret_cast<char *>(nonce.data()), nonce.size());
+
+    if (!nonce_file) {
       return std::unexpected(KeyManagerError::FileNotFound);
     }
     return nonce;

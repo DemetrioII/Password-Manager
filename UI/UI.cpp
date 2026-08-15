@@ -276,7 +276,7 @@ MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
       SecureString password{form.getPassword().toStdString()};
       form.clearSensitiveFields();
 
-      if (!vault::service::save(password, session_key_, name, vault_)
+      if (!vault::service::save(std::move(password), session_key_, name, vault_)
                .has_value()) {
         QMessageBox::critical(this, "error", "Unsuccessful serialization");
         return;
@@ -293,7 +293,7 @@ MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
       SecureString password{form.getPassword().toStdString()};
       form.clearSensitiveFields();
 
-      if (!vault::service::load(password, session_key_, name, vault_)
+      if (!vault::service::load(std::move(password), session_key_, name, vault_)
                .has_value()) {
         QMessageBox::critical(this, "error",
                               "Deserialization was unsuccessful");

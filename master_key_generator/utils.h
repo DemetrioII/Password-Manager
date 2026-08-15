@@ -10,13 +10,10 @@ enum class KeyManagerError {
   FileNotFound,
 };
 
-#define MESSAGE ((const unsigned char *)"test")
-#define MESSAGE_LEN 32
-#define CIPHERTEXT_LEN (crypto_secretbox_MACBYTES + MESSAGE_LEN)
-
 using Salt = std::array<std::byte, crypto_pwhash_SALTBYTES>;
 
-using Nonce = std::array<std::byte, crypto_secretbox_NONCEBYTES>;
+using Nonce =
+    std::array<std::byte, crypto_aead_xchacha20poly1305_ietf_NPUBBYTES>;
 
 class NonceManager {
 public:

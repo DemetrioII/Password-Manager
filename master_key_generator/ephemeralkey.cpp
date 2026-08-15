@@ -15,7 +15,6 @@ EphemeralKey::EphemeralKey(EphemeralKey &&other) noexcept {
   sodium_mlock(key_.data(), key_.size());
   std::memcpy(key_.data(), other.key_.data(), key_.size());
   sodium_memzero(other.key_.data(), other.key_.size());
-  sodium_munlock(other.key_.data(), other.key_.size());
 }
 
 EphemeralKey &EphemeralKey::operator=(EphemeralKey &&other) noexcept {
@@ -27,7 +26,6 @@ EphemeralKey &EphemeralKey::operator=(EphemeralKey &&other) noexcept {
   std::memcpy(key_.data(), other.key_.data(), key_.size());
 
   sodium_memzero(other.key_.data(), other.key_.size());
-  sodium_munlock(other.key_.data(), other.key_.size());
   return *this;
 }
 

@@ -18,9 +18,9 @@ public:
   [[nodiscard]] const unsigned char *data() const noexcept;
 
   [[nodiscard]] static constexpr std::size_t size() noexcept {
-    return crypto_secretbox_KEYBYTES;
+    return crypto_aead_xchacha20poly1305_ietf_KEYBYTES;
   }
 
 private:
-  std::array<std::byte, crypto_secretbox_KEYBYTES> key_;
+  std::array<std::byte, crypto_aead_xchacha20poly1305_ietf_KEYBYTES> key_;
 };

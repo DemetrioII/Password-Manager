@@ -116,14 +116,17 @@ struct VaultKeys {
 };
 
 namespace vault {
+using VaultHeader =
+    std::array<std::byte, crypto_pwhash_SALTBYTES * 2 +
+                              crypto_aead_xchacha20poly1305_ietf_NPUBBYTES>;
+
+VaultHeader make_header(const Salt &meta_salt, const Salt &master_salt,
+                        const Nonce &nonce);
+
 VaultKeys derive_keys_from_password(
-    const SecureString &password,
+    SecureString &&password,
     const std::array<std::byte, crypto_pwhash_SALTBYTES> &salt_meta,
     const std::array<std::byte, crypto_pwhash_SALTBYTES> &salt_pass);
-
-std::string vaultNonceFile(const std::string &name);
-
-std::pair<std::string, std::string> vaultSaltFiles(const std::string &name);
 
 class Vault {
   friend class Serializator;
@@ -136,19 +139,12 @@ public:
 
   Vault() = default;
 
-  void load_metadata(const std::string &salt_meta_file,
-                     const std::string &salt_master_file,
-                     const std::string &nonce_file);
-
-  void save_metadata(const std::string &name);
-
   void init();
 
 private:
   std::vector<PasswordEntry> entries_;
   Salt meta_salt_;
   Salt master_salt_;
-  Nonce nonce_;
   bool locked_ = false;
 };
 
@@ -156,21 +152,21 @@ class Serializator {
 public:
   [[nodiscard]]
   static std::expected<void, VaultError>
-  serialize(VaultKeys &&, const EphemeralKey &session_key,
+  serialize(SecureString &&, const EphemeralKey &session_key,
             const std::string &file_path, const Vault &vault);
   [[nodiscard]]
   static std::expected<void, VaultError>
-  deserialize(VaultKeys &&, const EphemeralKey &session_key,
+  deserialize(SecureString &&, const EphemeralKey &session_key,
               const std::string &path, Vault &vault);
 };
 
 class service {
 public:
-  static std::expected<void, VaultError> save(const SecureString &,
+  static std::expected<void, VaultError> save(SecureString &&,
                                               const EphemeralKey &session_key,
                                               const std::string &name, Vault &);
 
-  static std::expected<void, VaultError> load(const SecureString &,
+  static std::expected<void, VaultError> load(SecureString &&,
                                               const EphemeralKey &session_key,
                                               const std::string &name, Vault &);
 };

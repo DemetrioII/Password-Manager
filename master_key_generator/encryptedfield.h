@@ -1,12 +1,9 @@
 #pragma once
 #include "master_key_generator/ephemeralkey.h"
 #include "master_key_generator/securestring.h"
+#include "utils.h"
 #include <sodium.h>
 #include <vector>
-
-using Salt = std::array<std::byte, crypto_pwhash_SALTBYTES>;
-
-using Nonce = std::array<std::byte, crypto_secretbox_NONCEBYTES>;
 
 struct EncryptedField {
   std::vector<unsigned char> ciphertext;

@@ -1,8 +1,8 @@
 #include "UI.hpp"
 
-PasswordItemWidget::PasswordItemWidget(const PasswordEntry &entry,
+PasswordItemWidget::PasswordItemWidget(const vault::PasswordEntry &entry,
                                        const EphemeralKey &session_key,
-                                       const UUID &ID, QWidget *parent)
+                                       const vault::UUID &ID, QWidget *parent)
     : QWidget(parent), id_(ID) {
   titleLabel_ = new QLabel(QString::fromStdString(entry.title));
   loginLabel_ = new QLabel(QString::fromStdString(entry.login));
@@ -47,7 +47,7 @@ PasswordItemWidget::PasswordItemWidget(const PasswordEntry &entry,
                    });
 }
 
-UUID PasswordItemWidget::get_id() const { return id_; }
+vault::UUID PasswordItemWidget::get_id() const { return id_; }
 
 PasswordForm::PasswordForm(QWidget *parent) : QDialog(parent) {
   setWindowTitle("Please fill the form of your new password");
@@ -82,7 +82,7 @@ PasswordForm::PasswordForm(QWidget *parent) : QDialog(parent) {
   setLayout(layout);
 }
 
-PasswordForm::PasswordForm(const PasswordEntry &entry,
+PasswordForm::PasswordForm(const vault::PasswordEntry &entry,
                            const EphemeralKey &session_key, QWidget *parent)
     : QDialog(parent) {
   titleEdit = new QLineEdit;
@@ -213,7 +213,7 @@ MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
       SecureString password{form.getPassword().toStdString()};
       form.clearSensitiveFields();
 
-      PasswordEntry entry;
+      vault::PasswordEntry entry;
       entry.title = title.toStdString();
       entry.login = login.toStdString();
       entry.password = EncryptedField::encrypt(password.view(), session_key_);

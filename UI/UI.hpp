@@ -1,5 +1,6 @@
 #pragma once
 #include "vault_storage/vault.h"
+#include "vault_storage/vault_serializer.h"
 #include <QApplication>
 #include <QLineEdit>
 #include <QListWidget>
@@ -10,18 +11,18 @@
 class PasswordItemWidget : public QWidget {
   Q_OBJECT
 public:
-  explicit PasswordItemWidget(const PasswordEntry &entry,
-                              const EphemeralKey &session_key, const UUID &ID,
-                              QWidget *parent = nullptr);
+  explicit PasswordItemWidget(const vault::PasswordEntry &entry,
+                              const EphemeralKey &session_key,
+                              const vault::UUID &ID, QWidget *parent = nullptr);
 
-  UUID get_id() const;
+  vault::UUID get_id() const;
 
 private:
   QLabel *titleLabel_;
   QLabel *loginLabel_;
   QLineEdit *passwordEdit_;
   QToolButton *showButton_;
-  UUID id_;
+  vault::UUID id_;
 };
 
 class PasswordForm : public QDialog {
@@ -29,7 +30,7 @@ class PasswordForm : public QDialog {
 public:
   explicit PasswordForm(QWidget *parent = nullptr);
 
-  explicit PasswordForm(const PasswordEntry &entry,
+  explicit PasswordForm(const vault::PasswordEntry &entry,
                         const EphemeralKey &session_key, QWidget *parent);
 
   QString getTitle() const { return titleEdit->text(); }

@@ -1,8 +1,8 @@
 #include "UI.hpp"
 
 PasswordItemWidget::PasswordItemWidget(const PasswordEntry &entry,
-                                       const EphemeralKey &session_key, int ID,
-                                       QWidget *parent)
+                                       const EphemeralKey &session_key,
+                                       const UUID &ID, QWidget *parent)
     : QWidget(parent), id_(ID) {
   titleLabel_ = new QLabel(QString::fromStdString(entry.title));
   loginLabel_ = new QLabel(QString::fromStdString(entry.login));
@@ -47,7 +47,7 @@ PasswordItemWidget::PasswordItemWidget(const PasswordEntry &entry,
                    });
 }
 
-int PasswordItemWidget::get_id() const { return id_; }
+UUID PasswordItemWidget::get_id() const { return id_; }
 
 PasswordForm::PasswordForm(QWidget *parent) : QDialog(parent) {
   setWindowTitle("Please fill the form of your new password");
@@ -240,8 +240,7 @@ MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
 
     if (!widget)
       return;
-    widget->get_id();
-    int idx = widget->get_id();
+    auto idx = widget->get_id();
     if (vault_.Remove(idx).has_value()) {
       refreshPasswordList();
     } else {
@@ -252,13 +251,24 @@ MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
   QObject::connect(editAction, &QAction::triggered, this, [&]() {
     auto *item = passwords_->currentItem();
 
-    const int idx = item->data(Qt::UserRole).toInt();
+    auto *widget =
+        qobject_cast<PasswordItemWidget *>(passwords_->itemWidget(item));
+    if (!widget)
+      return;
 
-    qDebug() << idx;
-    PasswordForm form(vault_.Entries()[idx], session_key_, this);
+    const auto idx = widget->get_id();
+
+    qDebug() << QString::fromStdString(idx);
+    auto entry_res = vault_.Find(idx);
+    if (!entry_res.has_value()) {
+      qDebug() << "Error getting entry";
+      return;
+    }
+    PasswordForm form(*entry_res.value(), session_key_, this);
     if (form.exec() == QDialog::Accepted) {
       vault_.Remove(idx);
-      vault_.Add({.title = form.getTitle().toStdString(),
+      vault_.Add({.id = idx,
+                  .title = form.getTitle().toStdString(),
                   .login = form.getLogin().toStdString(),
                   .password = EncryptedField::encrypt(
                       form.getPassword().toStdString(), session_key_)});
@@ -313,8 +323,7 @@ void MainWindow::refreshPasswordList() {
 
   for (const auto &entry : vault_.Entries()) {
     auto *item = new QListWidgetItem(passwords_);
-    auto *widget =
-        new PasswordItemWidget(entry, session_key_, passwords_->count() - 1);
+    auto *widget = new PasswordItemWidget(entry, session_key_, entry.id);
 
     item->setData(Qt::UserRole, passwords_->count() - 1);
     item->setSizeHint(widget->sizeHint());

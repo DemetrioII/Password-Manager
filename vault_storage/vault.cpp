@@ -18,7 +18,7 @@ VaultKeys vault::derive_keys_from_password(
                     crypto_pwhash_OPSLIMIT_INTERACTIVE,
                     crypto_pwhash_MEMLIMIT_INTERACTIVE,
                     crypto_pwhash_ALG_ARGON2ID13) != 0) {
-    throw std::runtime_error("Out of memory during Argon2id");
+    throw KDFError("Out of memory during Argon2id");
   }
 
   if (crypto_pwhash(keys.master_key.data(), keys.master_key.size(),
@@ -27,7 +27,7 @@ VaultKeys vault::derive_keys_from_password(
                     crypto_pwhash_OPSLIMIT_INTERACTIVE,
                     crypto_pwhash_MEMLIMIT_INTERACTIVE,
                     crypto_pwhash_ALG_ARGON2ID13) != 0) {
-    throw std::runtime_error("Out of memory during Argon2id");
+    throw KDFError("Out of memory during Argon2id");
   }
 
   return keys;
@@ -69,11 +69,28 @@ std::expected<void, VaultError> vault::Vault::Add(PasswordEntry &&entry) {
   return {};
 }
 
-std::expected<void, VaultError> vault::Vault::Remove(std::size_t index) {
+std::expected<void, VaultError> vault::Vault::Remove(const UUID &id) {
   if (locked_)
     return std::unexpected(VaultError::VaultLocked);
-  entries_.erase(entries_.begin() + index);
+  auto it =
+      std::find_if(entries_.begin(), entries_.end(),
+                   [&](const PasswordEntry &entry) { return entry.id == id; });
+  if (it == entries_.end())
+    return std::unexpected(VaultError::EntryNotFound);
+
+  entries_.erase(it);
   return {};
+}
+
+std::expected<PasswordEntry *, VaultError> vault::Vault::Find(const UUID &id) {
+  if (locked_)
+    return std::unexpected(VaultError::VaultLocked);
+  auto it =
+      std::find_if(entries_.begin(), entries_.end(),
+                   [&](const PasswordEntry &entry) { return entry.id == id; });
+  if (it == entries_.end())
+    return std::unexpected(VaultError::EntryNotFound);
+  return &(*it);
 }
 
 const std::vector<PasswordEntry> &vault::Vault::Entries() const {
@@ -94,8 +111,13 @@ std::expected<void, VaultError> vault::Serializator::serialize(
       reinterpret_cast<const unsigned char *>(vault.master_salt_.data()),
       vault.master_salt_.size());
 
-  VaultKeys keys = vault::derive_keys_from_password(
-      std::move(password), vault.meta_salt_, vault.master_salt_);
+  VaultKeys keys;
+  try {
+    keys = vault::derive_keys_from_password(
+        std::move(password), vault.meta_salt_, vault.master_salt_);
+  } catch (const KDFError &) {
+    return std::unexpected(VaultError::OutOfMemory);
+  }
 
   Nonce vault_nonce = NonceManager::generate();
 
@@ -111,13 +133,16 @@ std::expected<void, VaultError> vault::Serializator::serialize(
 
     Nonce nonce = NonceManager::generate();
 
-    auto ciphertext = CryptoService::cypher(entry.password.decrypt(session_key),
-                                            nonce, keys.master_key);
+    try {
+      auto ciphertext = CryptoService::cypher(
+          entry.password.decrypt(session_key), nonce, keys.master_key);
+      e->set_password(reinterpret_cast<const char *>(ciphertext.data()),
+                      ciphertext.size());
+    } catch (const CryptoError &) {
+      return std::unexpected(VaultError::CryptoError);
+    }
 
     e->set_nonce(reinterpret_cast<const char *>(nonce.data()), nonce.size());
-
-    e->set_password(reinterpret_cast<const char *>(ciphertext.data()),
-                    ciphertext.size());
 
     e->set_notes(entry.notes);
   }
@@ -243,7 +268,7 @@ vault::Serializator::deserialize(SecureString &&password,
   decrypted.resize(decrypted_size);
 
   if (!entries.ParseFromString(decrypted))
-    return std::unexpected(VaultError::IoError);
+    return std::unexpected(VaultError::VaultCorrupted);
 
   sodium_memzero(decrypted.data(), decrypted.size());
   decrypted.clear();
@@ -268,10 +293,14 @@ vault::Serializator::deserialize(SecureString &&password,
     std::memcpy(password_nonce.data(), e.nonce().data(),
                 crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
 
-    SecureString plaintext = CryptoService::decypher(
-        SecureString{e.password()}, password_nonce, keys.master_key);
+    try {
+      SecureString plaintext = CryptoService::decypher(
+          SecureString{e.password()}, password_nonce, keys.master_key);
 
-    entry.password = EncryptedField::encrypt(plaintext.view(), session_key);
+      entry.password = EncryptedField::encrypt(plaintext.view(), session_key);
+    } catch (CryptoError &) {
+      return std::unexpected(VaultError::CryptoError);
+    }
 
     temp_entries.push_back(std::move(entry));
   }

@@ -10,10 +10,6 @@
 
 #define KEY_LEN crypto_box_SEEDBYTES
 
-enum class CryptoError {
-
-};
-
 class CryptoService {
 public:
   static SecureString cypher(const SecureString &password, const Nonce &nonce,

@@ -24,7 +24,9 @@ enum class VaultError {
   AuthenticationFailed,
   SaltCorrupted,
   NonceCorrupted,
+  EntryNotFound,
   VaultLocked,
+  OutOfMemory
 };
 
 enum class FileIoError {
@@ -133,7 +135,9 @@ class Vault {
 
 public:
   std::expected<void, VaultError> Add(PasswordEntry &&entry);
-  std::expected<void, VaultError> Remove(std::size_t index);
+  std::expected<void, VaultError> Remove(const UUID &);
+
+  std::expected<PasswordEntry *, VaultError> Find(const UUID &);
 
   const std::vector<PasswordEntry> &Entries() const;
 

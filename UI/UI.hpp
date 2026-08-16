@@ -11,17 +11,17 @@ class PasswordItemWidget : public QWidget {
   Q_OBJECT
 public:
   explicit PasswordItemWidget(const PasswordEntry &entry,
-                              const EphemeralKey &session_key, int ID,
+                              const EphemeralKey &session_key, const UUID &ID,
                               QWidget *parent = nullptr);
 
-  int get_id() const;
+  UUID get_id() const;
 
 private:
   QLabel *titleLabel_;
   QLabel *loginLabel_;
   QLineEdit *passwordEdit_;
   QToolButton *showButton_;
-  int id_;
+  UUID id_;
 };
 
 class PasswordForm : public QDialog {

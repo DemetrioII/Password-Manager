@@ -15,6 +15,23 @@ using Salt = std::array<std::byte, crypto_pwhash_SALTBYTES>;
 using Nonce =
     std::array<std::byte, crypto_aead_xchacha20poly1305_ietf_NPUBBYTES>;
 
+class CryptoError : public std::runtime_error {
+public:
+  using std::runtime_error::runtime_error;
+};
+
+class InvalidCiphertext : public CryptoError {
+  using CryptoError::CryptoError;
+};
+
+class AuthenticationFailed : public CryptoError {
+  using CryptoError::CryptoError;
+};
+
+class KDFError : public std::runtime_error {
+  using std::runtime_error::runtime_error;
+};
+
 class NonceManager {
 public:
   static Nonce generate() {

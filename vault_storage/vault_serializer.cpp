@@ -1,8 +1,9 @@
 #include "vault_storage/vault_serializer.h"
 
-std::expected<void, vault::VaultError> vault::Serializator::serialize(
-    SecureString &&password, const EphemeralKey &session_key,
-    const std::string &file_path, const vault::Vault &vault) {
+std::expected<void, vault::VaultError>
+vault::Serializator::serialize(SecureString &&password,
+                               const std::string &file_path,
+                               const vault::Vault &vault) {
   password_manager::VaultProto proto;
   password_manager::EncryptedEntries entries;
 
@@ -38,7 +39,7 @@ std::expected<void, vault::VaultError> vault::Serializator::serialize(
 
     try {
       auto ciphertext = CryptoService::cypher(
-          entry.password.decrypt(session_key), nonce, keys.master_key);
+          entry.password.decrypt(vault.session_key_), nonce, keys.master_key);
       e->set_password(reinterpret_cast<const char *>(ciphertext.data()),
                       ciphertext.size());
     } catch (const CryptoError &) {
@@ -52,7 +53,7 @@ std::expected<void, vault::VaultError> vault::Serializator::serialize(
 
   std::string serialized;
   if (!entries.SerializeToString(&serialized))
-    return std::unexpected(vault::VaultError::IoError);
+    return std::unexpected(vault::VaultError::SerializationFailed);
 
   std::vector<unsigned char> encrypted(
       serialized.size() + crypto_aead_xchacha20poly1305_ietf_ABYTES);
@@ -82,7 +83,7 @@ std::expected<void, vault::VaultError> vault::Serializator::serialize(
   std::string final_serialized;
 
   if (!proto.SerializeToString(&final_serialized))
-    return std::unexpected(vault::VaultError::IoError);
+    return std::unexpected(vault::VaultError::SerializationFailed);
 
   std::vector<unsigned char> file_data(final_serialized.begin(),
                                        final_serialized.end());
@@ -90,14 +91,13 @@ std::expected<void, vault::VaultError> vault::Serializator::serialize(
   auto result = SafeFileWriter::WriteAtomic(file_path, file_data);
 
   if (!result)
-    return std::unexpected(vault::VaultError::FileOpenFailed);
+    return std::unexpected(vault::VaultError::IoError);
 
   return {};
 }
 
 std::expected<void, vault::VaultError>
 vault::Serializator::deserialize(SecureString &&password,
-                                 const EphemeralKey &session_key,
                                  const std::string &path, vault::Vault &vault) {
   if (vault.locked_)
     return std::unexpected(vault::VaultError::VaultLocked);
@@ -119,7 +119,7 @@ vault::Serializator::deserialize(SecureString &&password,
   std::string serialized_file(size, '\0');
 
   if (!file.read(serialized_file.data(), size))
-    return std::unexpected(vault::VaultError::FileOpenFailed);
+    return std::unexpected(vault::VaultError::IoError);
 
   if (!proto.ParseFromString(serialized_file))
     return std::unexpected(vault::VaultError::VaultCorrupted);
@@ -140,8 +140,13 @@ vault::Serializator::deserialize(SecureString &&password,
   std::memcpy(nonce.data(), proto.nonce().data(),
               crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
 
-  vault::VaultKeys keys = vault::derive_keys_from_password(
-      std::move(password), meta_salt, master_salt);
+  vault::VaultKeys keys;
+  try {
+    keys = vault::derive_keys_from_password(std::move(password), meta_salt,
+                                            master_salt);
+  } catch (const KDFError &) {
+    return std::unexpected(vault::VaultError::OutOfMemory);
+  }
 
   const std::string &encrypted_entries = proto.entries();
 
@@ -200,8 +205,9 @@ vault::Serializator::deserialize(SecureString &&password,
       SecureString plaintext = CryptoService::decypher(
           SecureString{e.password()}, password_nonce, keys.master_key);
 
-      entry.password = EncryptedField::encrypt(plaintext.view(), session_key);
-    } catch (CryptoError &) {
+      entry.password =
+          EncryptedField::encrypt(plaintext.view(), vault.session_key_);
+    } catch (const CryptoError &) {
       return std::unexpected(vault::VaultError::CryptoError);
     }
 
@@ -214,14 +220,13 @@ vault::Serializator::deserialize(SecureString &&password,
 }
 
 std::expected<void, vault::VaultError>
-vault::service::save(SecureString &&password, const EphemeralKey &session_key,
-                     const std::string &name, vault::Vault &vault) {
-  return Serializator::serialize(std::move(password), session_key, name, vault);
+vault::service::save(SecureString &&password, const std::string &name,
+                     vault::Vault &vault) {
+  return Serializator::serialize(std::move(password), name, vault);
 }
 
 std::expected<void, vault::VaultError>
-vault::service::load(SecureString &&password, const EphemeralKey &session_key,
-                     const std::string &name, vault::Vault &vault) {
-  return Serializator::deserialize(std::move(password), session_key, name,
-                                   vault);
+vault::service::load(SecureString &&password, const std::string &name,
+                     vault::Vault &vault) {
+  return Serializator::deserialize(std::move(password), name, vault);
 }

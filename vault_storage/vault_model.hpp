@@ -19,7 +19,8 @@ enum class VaultError {
   NonceCorrupted,
   EntryNotFound,
   VaultLocked,
-  OutOfMemory
+  OutOfMemory,
+  SerializationFailed,
 };
 
 enum class FileIoError {

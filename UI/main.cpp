@@ -5,8 +5,12 @@ int main(int argc, char *argv[]) {
   if (sodium_init() < 0)
     return 1;
 
-  vault::Vault vault;
-  vault.init();
+  SecureString password{""};
+  std::cout
+      << "Enter your master password (it's will be used to session key): ";
+  std::cin >> password;
+  vault::Vault vault(std::move(password));
+  vault.Init();
   QApplication app(argc, argv);
 
   QFile file(":/dark.qss");

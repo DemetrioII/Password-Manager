@@ -16,21 +16,34 @@ class Vault {
 
 public:
   std::expected<void, VaultError> Add(PasswordEntry &&entry);
+  std::expected<void, VaultError> Add(const std::string &title,
+                                      const std::string &login,
+                                      const SecureString &password);
   std::expected<void, VaultError> Remove(const UUID &);
 
-  std::expected<PasswordEntry *, VaultError> Find(const UUID &);
+  std::expected<const PasswordEntry *, VaultError> Find(const UUID &) const;
 
   const std::vector<PasswordEntry> &Entries() const;
 
-  Vault() = default;
+  std::expected<SecureString, VaultError> ShowPassword(const UUID &) const;
 
-  void init();
+  Vault(SecureString &&password);
+
+  void Lock();
+
+  bool Unlock(SecureString &&);
+
+  void Init();
 
 private:
   std::vector<PasswordEntry> entries_;
   Salt meta_salt_;
   Salt master_salt_;
+  EphemeralKey session_key_;
   bool locked_ = false;
+
+  std::string test_magic_plaintext = "LENIN";
+  EncryptedField test_magic_ciphertext;
 };
 
 } // namespace vault

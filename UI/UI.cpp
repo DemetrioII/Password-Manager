@@ -1,7 +1,7 @@
 #include "UI.hpp"
 
 PasswordItemWidget::PasswordItemWidget(const vault::PasswordEntry &entry,
-                                       const EphemeralKey &session_key,
+                                       const vault::Vault &vault,
                                        const vault::UUID &ID, QWidget *parent)
     : QWidget(parent), id_(ID) {
   titleLabel_ = new QLabel(QString::fromStdString(entry.title));
@@ -30,11 +30,10 @@ PasswordItemWidget::PasswordItemWidget(const vault::PasswordEntry &entry,
   layout->addWidget(passwordEdit_);
 
   QObject::connect(showButton_, &QToolButton::toggled, this,
-                   [this, &entry, &session_key](bool visible) {
+                   [this, &entry, &vault](bool visible) {
                      if (visible) {
-                       SecureString temp_pass =
-                           entry.password.decrypt(session_key);
-                       const auto view = temp_pass.view();
+                       SecureString password = *vault.ShowPassword(entry.id);
+                       const auto view = password.view();
 
                        passwordEdit_->setText(QString::fromUtf8(
                            view.data(), static_cast<qsizetype>(view.size())));
@@ -83,7 +82,7 @@ PasswordForm::PasswordForm(QWidget *parent) : QDialog(parent) {
 }
 
 PasswordForm::PasswordForm(const vault::PasswordEntry &entry,
-                           const EphemeralKey &session_key, QWidget *parent)
+                           const vault::Vault &vault, QWidget *parent)
     : QDialog(parent) {
   titleEdit = new QLineEdit;
   loginEdit = new QLineEdit;
@@ -96,11 +95,10 @@ PasswordForm::PasswordForm(const vault::PasswordEntry &entry,
   titleEdit->setText(QString::fromStdString(entry.title));
   loginEdit->setText(QString::fromStdString(entry.login));
 
-  SecureString temp_pass = entry.password.decrypt(session_key);
-  const auto password = temp_pass.view();
-
+  auto pass = vault.ShowPassword(entry.id);
+  auto pass_view = pass->view();
   passwordEdit->setText(QString::fromUtf8(
-      password.data(), static_cast<qsizetype>(password.size())));
+      pass_view.data(), static_cast<qsizetype>(pass_view.size())));
 
   QFormLayout *layout = new QFormLayout;
   layout->addRow("Title:", titleEdit);
@@ -208,17 +206,12 @@ MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
     PasswordForm form(this);
 
     if (form.exec() == QDialog::Accepted) {
-      QString title = form.getTitle();
-      QString login = form.getLogin();
+      auto title = form.getTitle().toStdString();
+      auto login = form.getLogin().toStdString();
       SecureString password{form.getPassword().toStdString()};
       form.clearSensitiveFields();
 
-      vault::PasswordEntry entry;
-      entry.title = title.toStdString();
-      entry.login = login.toStdString();
-      entry.password = EncryptedField::encrypt(password.view(), session_key_);
-
-      if (!vault_.Add(std::move(entry)).has_value()) {
+      if (!vault_.Add(title, login, password).has_value()) {
         qDebug() << "Sorry, vault is locked. You must unlock it first to add "
                     "new entries";
       } else {
@@ -264,14 +257,12 @@ MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
       qDebug() << "Error getting entry";
       return;
     }
-    PasswordForm form(*entry_res.value(), session_key_, this);
+    PasswordForm form(*entry_res.value(), vault_, this);
     if (form.exec() == QDialog::Accepted) {
+      SecureString password{form.getPassword().toStdString()};
       vault_.Remove(idx);
-      vault_.Add({.id = idx,
-                  .title = form.getTitle().toStdString(),
-                  .login = form.getLogin().toStdString(),
-                  .password = EncryptedField::encrypt(
-                      form.getPassword().toStdString(), session_key_)});
+      vault_.Add(form.getTitle().toStdString(), form.getLogin().toStdString(),
+                 password);
       refreshPasswordList();
       form.clearSensitiveFields();
       QMessageBox::information(this, "info", "Entry was successfully updated!");
@@ -286,7 +277,7 @@ MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
       SecureString password{form.getPassword().toStdString()};
       form.clearSensitiveFields();
 
-      if (!vault::service::save(std::move(password), session_key_, name, vault_)
+      if (!vault::service::save(std::move(password), name, vault_)
                .has_value()) {
         QMessageBox::critical(this, "error", "Unsuccessful serialization");
         return;
@@ -303,7 +294,7 @@ MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
       SecureString password{form.getPassword().toStdString()};
       form.clearSensitiveFields();
 
-      if (!vault::service::load(std::move(password), session_key_, name, vault_)
+      if (!vault::service::load(std::move(password), name, vault_)
                .has_value()) {
         QMessageBox::critical(this, "error",
                               "Deserialization was unsuccessful");
@@ -323,7 +314,7 @@ void MainWindow::refreshPasswordList() {
 
   for (const auto &entry : vault_.Entries()) {
     auto *item = new QListWidgetItem(passwords_);
-    auto *widget = new PasswordItemWidget(entry, session_key_, entry.id);
+    auto *widget = new PasswordItemWidget(entry, vault_, entry.id);
 
     item->setData(Qt::UserRole, passwords_->count() - 1);
     item->setSizeHint(widget->sizeHint());

@@ -6,9 +6,15 @@
 #include <string_view>
 #include <unistd.h>
 
-void vault::Vault::init() {
+void vault::Vault::Init() {
   master_salt_ = SaltManager::generateSalt();
   meta_salt_ = SaltManager::generateSalt();
+}
+
+vault::Vault::Vault(SecureString &&password)
+    : session_key_(std::move(password)) {
+  test_magic_ciphertext =
+      EncryptedField::encrypt(test_magic_plaintext, session_key_);
 }
 
 std::expected<void, vault::VaultError>
@@ -29,6 +35,29 @@ vault::Vault::Add(PasswordEntry &&entry) {
   return {};
 }
 
+std::expected<void, vault::VaultError>
+vault::Vault::Add(const std::string &title, const std::string &login,
+                  const SecureString &password) {
+  return Add(
+      {.title = title,
+       .login = login,
+       .password = EncryptedField::encrypt(password.view(), session_key_)});
+}
+
+std::expected<SecureString, vault::VaultError>
+vault::Vault::ShowPassword(const UUID &id) const {
+  if (locked_)
+    return std::unexpected(VaultError::VaultLocked);
+
+  auto entry = Find(id);
+  if (!entry.has_value())
+    return std::unexpected(VaultError::EntryNotFound);
+
+  auto s = (*entry)->password.decrypt(session_key_);
+  std::cout << s.view();
+  return s;
+}
+
 std::expected<void, vault::VaultError> vault::Vault::Remove(const UUID &id) {
   if (locked_)
     return std::unexpected(VaultError::VaultLocked);
@@ -42,8 +71,8 @@ std::expected<void, vault::VaultError> vault::Vault::Remove(const UUID &id) {
   return {};
 }
 
-std::expected<vault::PasswordEntry *, vault::VaultError>
-vault::Vault::Find(const UUID &id) {
+std::expected<const vault::PasswordEntry *, vault::VaultError>
+vault::Vault::Find(const UUID &id) const {
   if (locked_)
     return std::unexpected(VaultError::VaultLocked);
   auto it =
@@ -56,4 +85,30 @@ vault::Vault::Find(const UUID &id) {
 
 const std::vector<vault::PasswordEntry> &vault::Vault::Entries() const {
   return entries_;
+}
+
+void vault::Vault::Lock() {
+  if (locked_)
+    return;
+
+  session_key_.reset();
+  locked_ = true;
+}
+
+bool vault::Vault::Unlock(SecureString &&password) {
+  auto new_potential_session_key = EphemeralKey(std::move(password));
+  try {
+    auto potential_plaintext =
+        test_magic_ciphertext.decrypt(new_potential_session_key).view();
+    if (potential_plaintext == test_magic_plaintext) {
+      locked_ = false;
+      return true;
+    } else {
+      locked_ = true;
+      return false;
+    }
+  } catch (const AuthenticationFailed &) {
+    locked_ = true;
+    return false;
+  }
 }

@@ -7,22 +7,19 @@ class Serializator {
 public:
   [[nodiscard]]
   static std::expected<void, vault::VaultError>
-  serialize(SecureString &&, const EphemeralKey &session_key,
-            const std::string &file_path, const vault::Vault &vault);
+  serialize(SecureString &&, const std::string &file_path,
+            const vault::Vault &vault);
   [[nodiscard]]
   static std::expected<void, vault::VaultError>
-  deserialize(SecureString &&, const EphemeralKey &session_key,
-              const std::string &path, vault::Vault &vault);
+  deserialize(SecureString &&, const std::string &path, vault::Vault &vault);
 };
 
 class service {
 public:
   static std::expected<void, vault::VaultError>
-  save(SecureString &&, const EphemeralKey &session_key,
-       const std::string &name, vault::Vault &);
+  save(SecureString &&, const std::string &name, vault::Vault &);
 
   static std::expected<void, vault::VaultError>
-  load(SecureString &&, const EphemeralKey &session_key,
-       const std::string &name, vault::Vault &);
+  load(SecureString &&, const std::string &name, vault::Vault &);
 };
 } // namespace vault

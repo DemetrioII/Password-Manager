@@ -102,6 +102,7 @@ bool vault::Vault::Unlock(SecureString &&password) {
         test_magic_ciphertext.decrypt(new_potential_session_key).view();
     if (potential_plaintext == test_magic_plaintext) {
       locked_ = false;
+      session_key_ = std::move(new_potential_session_key);
       return true;
     } else {
       locked_ = true;

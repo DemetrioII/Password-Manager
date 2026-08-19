@@ -7,13 +7,16 @@ vault::Serializator::serialize(SecureString &&password,
   password_manager::VaultProto proto;
   password_manager::EncryptedEntries entries;
 
-  proto.set_meta_salt(
-      reinterpret_cast<const unsigned char *>(vault.meta_salt_.data()),
-      vault.meta_salt_.size());
-
-  proto.set_master_salt(
-      reinterpret_cast<const unsigned char *>(vault.master_salt_.data()),
-      vault.master_salt_.size());
+  std::visit(
+      [&proto](const auto &meta_salt, const auto &master_salt) {
+        proto.set_meta_salt(
+            reinterpret_cast<const unsigned char *>(meta_salt.data()),
+            meta_salt.size());
+        proto.set_master_salt(
+            reinterpret_cast<const unsigned char *>(master_salt.data()),
+            master_salt.size());
+      },
+      vault.meta_salt_, vault.master_salt_);
 
   vault::VaultKeys keys;
   try {
@@ -23,7 +26,7 @@ vault::Serializator::serialize(SecureString &&password,
     return std::unexpected(vault::VaultError::OutOfMemory);
   }
 
-  Nonce vault_nonce = NonceManager::generate();
+  Nonce vault_nonce = NonceManager::generate<XChaCha20Poly1305Nonce>();
 
   vault::VaultHeader header =
       vault::make_header(vault.meta_salt_, vault.master_salt_, vault_nonce);
@@ -35,7 +38,7 @@ vault::Serializator::serialize(SecureString &&password,
     e->set_title(entry.title);
     e->set_login(entry.login);
 
-    Nonce nonce = NonceManager::generate();
+    Nonce nonce = NonceManager::generate<XChaCha20Poly1305Nonce>();
 
     try {
       auto ciphertext = CryptoService::cypher(
@@ -46,7 +49,12 @@ vault::Serializator::serialize(SecureString &&password,
       return std::unexpected(vault::VaultError::CryptoError);
     }
 
-    e->set_nonce(reinterpret_cast<const char *>(nonce.data()), nonce.size());
+    std::visit(
+        [&e](const auto &nonce) {
+          e->set_nonce(reinterpret_cast<const char *>(nonce.data()),
+                       nonce.size());
+        },
+        nonce);
 
     e->set_notes(entry.notes);
   }
@@ -54,28 +62,22 @@ vault::Serializator::serialize(SecureString &&password,
   std::string serialized;
   if (!entries.SerializeToString(&serialized))
     return std::unexpected(vault::VaultError::SerializationFailed);
+  std::vector<unsigned char> encrypted;
 
-  std::vector<unsigned char> encrypted(
-      serialized.size() + crypto_aead_xchacha20poly1305_ietf_ABYTES);
-
-  unsigned long long encrypted_size = 0;
-
-  if (crypto_aead_xchacha20poly1305_ietf_encrypt(
-          encrypted.data(), &encrypted_size,
-          reinterpret_cast<const unsigned char *>(serialized.data()),
-          serialized.size(),
-
-          reinterpret_cast<const unsigned char *>(header.data()), header.size(),
-
-          nullptr, reinterpret_cast<const unsigned char *>(vault_nonce.data()),
-          keys.meta_key.data()) != 0) {
-    return std::unexpected(vault::VaultError::CryptoError);
+  try {
+    encrypted = CryptoService::encrypt(serialized.data(), serialized.size(),
+                                       header.data(), header.size(),
+                                       vault_nonce, keys.meta_key);
+  } catch (const KDFError &) {
+    return std::unexpected(VaultError::CryptoError);
   }
 
-  encrypted.resize(encrypted_size);
-
-  proto.set_nonce(reinterpret_cast<const char *>(vault_nonce.data()),
-                  vault_nonce.size());
+  std::visit(
+      [&proto](const auto &vault_nonce) {
+        proto.set_nonce(reinterpret_cast<const char *>(vault_nonce.data()),
+                        vault_nonce.size());
+      },
+      vault_nonce);
 
   proto.set_entries(reinterpret_cast<const char *>(encrypted.data()),
                     encrypted.size());
@@ -132,13 +134,16 @@ vault::Serializator::deserialize(SecureString &&password,
   Nonce nonce;
 
   Salt master_salt, meta_salt;
-  std::memcpy(master_salt.data(), proto.master_salt().data(),
-              crypto_pwhash_SALTBYTES);
-  std::memcpy(meta_salt.data(), proto.meta_salt().data(),
-              crypto_pwhash_SALTBYTES);
-
-  std::memcpy(nonce.data(), proto.nonce().data(),
-              crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+  std::visit(
+      [&proto](auto &master_salt, auto &meta_salt, auto &nonce) {
+        std::memcpy(master_salt.data(), proto.master_salt().data(),
+                    crypto_pwhash_SALTBYTES);
+        std::memcpy(meta_salt.data(), proto.meta_salt().data(),
+                    crypto_pwhash_SALTBYTES);
+        std::memcpy(nonce.data(), proto.nonce().data(),
+                    crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+      },
+      master_salt, meta_salt, nonce);
 
   vault::VaultKeys keys;
   try {
@@ -155,25 +160,15 @@ vault::Serializator::deserialize(SecureString &&password,
 
   vault::VaultHeader header = vault::make_header(meta_salt, master_salt, nonce);
 
-  std::string decrypted(encrypted_entries.size() -
-                            crypto_aead_xchacha20poly1305_ietf_ABYTES,
-                        '\0');
+  std::string decrypted;
 
-  unsigned long long decrypted_size = 0;
-
-  if (crypto_aead_xchacha20poly1305_ietf_decrypt(
-          reinterpret_cast<unsigned char *>(decrypted.data()), &decrypted_size,
-          nullptr,
-          reinterpret_cast<const unsigned char *>(encrypted_entries.data()),
-          encrypted_entries.size(),
-
-          reinterpret_cast<const unsigned char *>(header.data()), header.size(),
-          reinterpret_cast<const unsigned char *>(nonce.data()),
-          keys.meta_key.data()) != 0) {
-    return std::unexpected(vault::VaultError::CryptoError);
+  try {
+    decrypted = CryptoService::decrypt(encrypted_entries.data(),
+                                       encrypted_entries.size(), header.data(),
+                                       header.size(), nonce, keys.meta_key);
+  } catch (const CryptoError &) {
+    return std::unexpected(VaultError::CryptoError);
   }
-
-  decrypted.resize(decrypted_size);
 
   if (!entries.ParseFromString(decrypted))
     return std::unexpected(vault::VaultError::VaultCorrupted);
@@ -198,8 +193,12 @@ vault::Serializator::deserialize(SecureString &&password,
 
     Nonce password_nonce;
 
-    std::memcpy(password_nonce.data(), e.nonce().data(),
-                crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+    std::visit(
+        [&e](auto &password_nonce) {
+          std::memcpy(password_nonce.data(), e.nonce().data(),
+                      password_nonce.size());
+        },
+        password_nonce);
 
     try {
       SecureString plaintext = CryptoService::decypher(

@@ -52,9 +52,8 @@ using VaultHeader =
 VaultHeader make_header(const Salt &meta_salt, const Salt &master_salt,
                         const Nonce &nonce);
 
-VaultKeys derive_keys_from_password(
-    SecureString &&password,
-    const std::array<std::byte, crypto_pwhash_SALTBYTES> &salt_meta,
-    const std::array<std::byte, crypto_pwhash_SALTBYTES> &salt_pass);
+VaultKeys derive_keys_from_password(SecureString &&password,
+                                    const Salt &salt_meta,
+                                    const Salt &salt_pass);
 
 } // namespace vault

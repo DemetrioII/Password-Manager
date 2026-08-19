@@ -78,6 +78,12 @@ private:
   QLineEdit *passwordEdit;
 };
 
+class LockForm : public QDialog {
+  Q_OBJECT
+public:
+  LockForm(QWidget *parent = nullptr);
+};
+
 class MainWindow : public QMainWindow {
   Q_OBJECT
 public:
@@ -86,9 +92,14 @@ public:
 
   void refreshPasswordList();
 
+  bool isLocked() const;
+
+  bool unlock(SecureString &&password);
+
 private:
   QListWidget *passwords_;
   QLineEdit *search_;
 
+  bool locked_{false};
   vault::Vault vault_;
 };

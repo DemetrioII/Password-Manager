@@ -1,16 +1,21 @@
 #include "UI.hpp"
 #include <QApplication>
 
-int main(int argc, char *argv[]) {
-  if (sodium_init() < 0)
-    return 1;
-
+vault::Vault create_the_vault() {
   SecureString password{""};
   std::cout
       << "Enter your master password (it's will be used to session key): ";
   std::cin >> password;
   vault::Vault vault(std::move(password));
   vault.Init();
+  return vault;
+}
+
+int main(int argc, char *argv[]) {
+  if (sodium_init() < 0)
+    return 1;
+
+  auto vault = create_the_vault();
   QApplication app(argc, argv);
 
   QFile file(":/dark.qss");
@@ -24,5 +29,21 @@ int main(int argc, char *argv[]) {
 
   MainWindow window(std::move(vault));
   window.show();
-  return app.exec();
+
+  int result = app.exec();
+
+  while (window.isLocked()) {
+    SecureString pass{""};
+    std::cout << "Please enter your session password: ";
+    std::cin >> pass;
+    if (window.unlock(std::move(pass))) {
+      window.show();
+      result = app.exec();
+    } else {
+      std::cout << "Sorry, wrong password";
+      break;
+    }
+  }
+
+  return result;
 }

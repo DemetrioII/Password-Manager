@@ -42,7 +42,7 @@ private:
   EphemeralKey session_key_;
   bool locked_ = false;
 
-  std::string test_magic_plaintext = "LENIN";
+  const std::string test_magic_plaintext = "LENIN";
   EncryptedField test_magic_ciphertext;
 };
 

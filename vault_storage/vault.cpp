@@ -7,14 +7,18 @@
 #include <unistd.h>
 
 void vault::Vault::Init() {
-  master_salt_ = SaltManager::generateSalt();
-  meta_salt_ = SaltManager::generateSalt();
+  master_salt_ = SaltManager::generateSalt<Argon2Salt>();
+  meta_salt_ = SaltManager::generateSalt<Argon2Salt>();
 }
 
 vault::Vault::Vault(SecureString &&password)
     : session_key_(std::move(password)) {
   test_magic_ciphertext =
       EncryptedField::encrypt(test_magic_plaintext, session_key_);
+  for (auto &i : test_magic_ciphertext.ciphertext) {
+    std::cout << std::hex << i << ' ';
+  }
+  std::cout << std::endl;
 }
 
 std::expected<void, vault::VaultError>
@@ -54,7 +58,6 @@ vault::Vault::ShowPassword(const UUID &id) const {
     return std::unexpected(VaultError::EntryNotFound);
 
   auto s = (*entry)->password.decrypt(session_key_);
-  std::cout << s.view();
   return s;
 }
 
@@ -98,9 +101,8 @@ void vault::Vault::Lock() {
 bool vault::Vault::Unlock(SecureString &&password) {
   auto new_potential_session_key = EphemeralKey(std::move(password));
   try {
-    auto potential_plaintext =
-        test_magic_ciphertext.decrypt(new_potential_session_key).view();
-    if (potential_plaintext == test_magic_plaintext) {
+    if (test_magic_ciphertext.decrypt(new_potential_session_key).view() ==
+        test_magic_plaintext) {
       locked_ = false;
       session_key_ = std::move(new_potential_session_key);
       return true;

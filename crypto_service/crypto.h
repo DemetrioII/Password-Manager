@@ -8,8 +8,6 @@
 #include <string>
 #include <vector>
 
-#define KEY_LEN crypto_box_SEEDBYTES
-
 class CryptoService {
 public:
   static SecureString cypher(const SecureString &password, const Nonce &nonce,
@@ -17,4 +15,15 @@ public:
 
   static SecureString decypher(const SecureString &password, const Nonce &nonce,
                                const Key &key);
+
+  static std::vector<unsigned char> encrypt(const char *plaintext,
+                                            const std::size_t plaintext_size,
+                                            const std::byte *AAD,
+                                            const std::size_t AAD_size,
+                                            const Nonce &nonce, const Key &key);
+
+  static std::string decrypt(const char *ciphertext,
+                             const std::size_t ciphertext_size,
+                             const std::byte *AAD, const std::size_t AAD_size,
+                             const Nonce &nonce, const Key &key);
 };

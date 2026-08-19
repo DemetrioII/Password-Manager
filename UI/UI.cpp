@@ -175,6 +175,22 @@ LoadForm::LoadForm(QWidget *parent) : QDialog(parent) {
   setLayout(layout);
 }
 
+LockForm::LockForm(QWidget *parent) {
+  auto *layout = new QFormLayout;
+
+  QDialogButtonBox *buttonBox =
+      new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+
+  QObject::connect(buttonBox, &QDialogButtonBox::accepted, this,
+                   &QDialog::accept);
+
+  QObject::connect(buttonBox, &QDialogButtonBox::rejected, this,
+                   &QDialog::reject);
+
+  layout->addRow(buttonBox);
+  setLayout(layout);
+}
+
 MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
     : vault_(std::move(vault)) {
   setWindowTitle("Password Manager");
@@ -187,6 +203,7 @@ MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
   auto *editAction = toolbar->addAction("Edit");
   auto *saveAction = toolbar->addAction("Save");
   auto *loadAction = toolbar->addAction("Load");
+  auto *lockAction = toolbar->addAction("Lock");
 
   auto *central = new QWidget;
 
@@ -307,6 +324,17 @@ MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
       }
     }
   });
+
+  QObject::connect(lockAction, &QAction::triggered, this, [&]() {
+    LockForm form(this);
+    if (form.exec() != QDialog::Accepted) {
+      return;
+    }
+
+    vault_.Lock();
+    locked_ = true;
+    close();
+  });
 }
 
 void MainWindow::refreshPasswordList() {
@@ -321,6 +349,16 @@ void MainWindow::refreshPasswordList() {
 
     passwords_->setItemWidget(item, widget);
   }
+}
+
+bool MainWindow::isLocked() const { return locked_; }
+
+bool MainWindow::unlock(SecureString &&password) {
+  if (vault_.Unlock(std::move(password))) {
+    locked_ = false;
+    return true;
+  }
+  return false;
 }
 
 MainWindow::~MainWindow() = default;

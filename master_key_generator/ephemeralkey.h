@@ -7,6 +7,7 @@
 
 class EphemeralKey {
 public:
+  EphemeralKey();
   EphemeralKey(SecureString &&);
 
   ~EphemeralKey() noexcept;

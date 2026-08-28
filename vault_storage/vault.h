@@ -35,6 +35,8 @@ public:
 
   void Init();
 
+  Vault(Vault &&other) noexcept = default;
+
 private:
   std::vector<PasswordEntry> entries_;
   Salt meta_salt_;
@@ -42,7 +44,7 @@ private:
   EphemeralKey session_key_;
   bool locked_ = false;
 
-  const std::string test_magic_plaintext = "LENIN";
+  SecureString test_magic_plaintext{"LENIN"};
   EncryptedField test_magic_ciphertext;
 };
 

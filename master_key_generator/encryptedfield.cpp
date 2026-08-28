@@ -31,10 +31,13 @@ SecureString EncryptedField::decrypt(const EphemeralKey &session_key) const {
               "XChaCha20-Poly1305 authentication failed");
       },
       nonce);
+
+  if (plain_text_size != plain_text.size())
+    throw CryptoError("Unknown error during the decryption");
   return plain_text;
 }
 
-EncryptedField EncryptedField::encrypt(std::string_view plain_text,
+EncryptedField EncryptedField::encrypt(const SecureString &plain_text,
                                        const EphemeralKey &session_key) {
   EncryptedField field;
   field.nonce = NonceManager::generate<XChaCha20Poly1305Nonce>();

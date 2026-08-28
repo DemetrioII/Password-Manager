@@ -7,6 +7,13 @@
 #include <string>
 #include <variant>
 
+#define MAX_VAULT_SIZE 1024 * 64 * 8
+#define MAX_ENTRIES 1000
+#define MAX_TITLE_SIZE 512
+#define MAX_LOGIN_SIZE 1024
+#define MAX_NOTES_SIZE 2048
+#define MAX_PASSWORD_CIPHERTEXT_SIZE 2048
+
 enum class KeyManagerError {
   FileNotFound,
 };
@@ -47,7 +54,8 @@ template <typename T> const T &get(const Nonce &nonce) {
 
 class NonceManager {
 public:
-  template <typename NonceType> static Nonce generate() {
+  template <typename NonceType = XChaCha20Poly1305Nonce>
+  static Nonce generate() {
     NonceType nonce;
     randombytes_buf(nonce.data(), nonce.size());
     return nonce;

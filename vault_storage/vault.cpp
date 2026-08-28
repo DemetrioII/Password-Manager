@@ -42,10 +42,9 @@ vault::Vault::Add(PasswordEntry &&entry) {
 std::expected<void, vault::VaultError>
 vault::Vault::Add(const std::string &title, const std::string &login,
                   const SecureString &password) {
-  return Add(
-      {.title = title,
-       .login = login,
-       .password = EncryptedField::encrypt(password.view(), session_key_)});
+  return Add({.title = title,
+              .login = login,
+              .password = EncryptedField::encrypt(password, session_key_)});
 }
 
 std::expected<SecureString, vault::VaultError>
@@ -101,7 +100,7 @@ void vault::Vault::Lock() {
 bool vault::Vault::Unlock(SecureString &&password) {
   auto new_potential_session_key = EphemeralKey(std::move(password));
   try {
-    if (test_magic_ciphertext.decrypt(new_potential_session_key).view() ==
+    if (test_magic_ciphertext.decrypt(new_potential_session_key) ==
         test_magic_plaintext) {
       locked_ = false;
       session_key_ = std::move(new_potential_session_key);

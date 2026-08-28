@@ -204,8 +204,7 @@ vault::Serializator::deserialize(SecureString &&password,
       SecureString plaintext = CryptoService::decypher(
           SecureString{e.password()}, password_nonce, keys.master_key);
 
-      entry.password =
-          EncryptedField::encrypt(plaintext.view(), vault.session_key_);
+      entry.password = EncryptedField::encrypt(plaintext, vault.session_key_);
     } catch (const CryptoError &) {
       return std::unexpected(vault::VaultError::CryptoError);
     }

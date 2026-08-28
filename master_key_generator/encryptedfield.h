@@ -11,6 +11,6 @@ struct EncryptedField {
 
   SecureString decrypt(const EphemeralKey &session_key) const;
 
-  static EncryptedField encrypt(std::string_view plain_text,
+  static EncryptedField encrypt(const SecureString &plain_text,
                                 const EphemeralKey &session_key);
 };

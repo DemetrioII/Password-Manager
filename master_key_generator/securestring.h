@@ -17,28 +17,11 @@ public:
   SecureString(SecureString &&) noexcept;
   SecureString &operator=(SecureString &&) noexcept;
 
-  void assign(const char *data, std::size_t size) {
-    clear();
-    if (size == 0 || data == nullptr)
-      return;
+  void assign(const char *data, std::size_t size);
 
-    data_ = static_cast<char *>(sodium_malloc(size));
-    if (!data_) {
-      throw std::bad_alloc();
-    }
+  friend bool operator==(const SecureString &lhs, const SecureString &rhs);
 
-    std::copy_n(data, size, data_);
-    size_ = size;
-    // sodium_mprotect_readonly(data_);
-  }
-
-  void clear() noexcept {
-    if (data_) {
-      sodium_free(data_);
-      data_ = nullptr;
-    }
-    size_ = 0;
-  }
+  void clear() noexcept;
 
   [[nodiscard]] const char *data() const noexcept { return data_; }
 

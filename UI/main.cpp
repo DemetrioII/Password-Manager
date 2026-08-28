@@ -15,7 +15,7 @@ int main(int argc, char *argv[]) {
   if (sodium_init() < 0)
     return 1;
 
-  auto vault = create_the_vault();
+  auto vault{create_the_vault()};
   QApplication app(argc, argv);
 
   QFile file(":/dark.qss");

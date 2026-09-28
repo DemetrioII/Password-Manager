@@ -8,7 +8,7 @@
 class EphemeralKey {
 public:
   EphemeralKey();
-  EphemeralKey(SecureString &&);
+  EphemeralKey(SecureString &&, const Argon2Salt &);
 
   ~EphemeralKey() noexcept;
 

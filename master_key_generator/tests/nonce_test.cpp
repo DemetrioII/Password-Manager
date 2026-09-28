@@ -22,8 +22,9 @@ TEST_F(NonceTest, GenerateHasCorrectSize) {
   const auto nonce = NonceManager::generate();
 
   std::visit(
-      [](const auto &nonce) {
-        EXPECT_EQ(nonce.size(), crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+      [](const auto &nonce_value) {
+        EXPECT_EQ(nonce_value.size(),
+                  crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
       },
       nonce);
 }
@@ -32,9 +33,9 @@ TEST_F(NonceTest, GeneratedNonceIsNotAllZeroes) {
   const auto nonce = NonceManager::generate();
 
   std::visit(
-      [](const auto &nonce) {
+      [](const auto &nonce_value) {
         const bool all_zero =
-            std::all_of(nonce.begin(), nonce.end(),
+            std::all_of(nonce_value.begin(), nonce_value.end(),
                         [](std::byte value) { return value == std::byte{0}; });
 
         EXPECT_FALSE(all_zero);
@@ -97,9 +98,9 @@ TEST_F(NonceTest, ExtraBytesAreIgnored) {
     std::ofstream file(path, std::ios::binary);
 
     std::visit(
-        [&file](const auto &original) {
-          file.write(reinterpret_cast<const char *>(original.data()),
-                     original.size());
+        [&file](const auto &original_value) {
+          file.write(reinterpret_cast<const char *>(original_value.data()),
+                     original_value.size());
         },
         original);
 

@@ -17,71 +17,14 @@ public:
 
   vault::UUID get_id() const;
 
+  ~PasswordItemWidget() override {}
+
 private:
   QLabel *titleLabel_;
   QLabel *loginLabel_;
   QLineEdit *passwordEdit_;
   QToolButton *showButton_;
   vault::UUID id_;
-};
-
-class PasswordForm : public QDialog {
-  Q_OBJECT
-public:
-  explicit PasswordForm(QWidget *parent = nullptr);
-
-  explicit PasswordForm(const vault::PasswordEntry &entry,
-                        const vault::Vault &vault, QWidget *parent);
-
-  QString getTitle() const { return titleEdit->text(); }
-  QString getLogin() const { return loginEdit->text(); }
-  QString getPassword() const { return passwordEdit->text(); }
-
-  void clearSensitiveFields() { passwordEdit->clear(); }
-
-signals:
-  void dataSubmitted(QString title, QString login, QString password);
-
-private:
-  QLineEdit *titleEdit;
-  QLineEdit *loginEdit;
-  QLineEdit *passwordEdit;
-};
-
-class SaveForm : public QDialog {
-  Q_OBJECT
-public:
-  SaveForm(QWidget *parent = nullptr);
-
-  QString getName() { return nameEdit->text(); }
-  QString getPassword() { return passwordEdit->text(); }
-
-  void clearSensitiveFields() { passwordEdit->clear(); }
-
-private:
-  QLineEdit *nameEdit;
-  QLineEdit *passwordEdit;
-};
-
-class LoadForm : public QDialog {
-  Q_OBJECT
-public:
-  LoadForm(QWidget *parent = nullptr);
-
-  QString getName() { return nameEdit->text(); }
-  QString getPassword() { return passwordEdit->text(); }
-
-  void clearSensitiveFields() { passwordEdit->clear(); }
-
-private:
-  QLineEdit *nameEdit;
-  QLineEdit *passwordEdit;
-};
-
-class LockForm : public QDialog {
-  Q_OBJECT
-public:
-  LockForm(QWidget *parent = nullptr);
 };
 
 class MainWindow : public QMainWindow {

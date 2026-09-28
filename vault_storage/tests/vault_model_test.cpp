@@ -13,52 +13,71 @@ protected:
   static void SetUpTestSuite() { ASSERT_EQ(sodium_init(), 0); }
 };
 
-TEST_F(VaultModelTest, MakeHeaderContainsMetaSaltMasterSaltAndNonce) {
+TEST_F(VaultModelTest, MakeHeaderContainsMetaSaltMasterSaltEphemeralSaltAndNonce) {
   Salt meta_salt{};
   Salt master_salt{};
+  Salt ephemeral_salt{};
   Nonce nonce{};
 
   std::visit(
-      [](auto &master_salt, auto &meta_salt, auto &nonce) {
-        std::ranges::fill(meta_salt, std::byte{0x11});
-        std::ranges::fill(master_salt, std::byte{0x22});
-        std::ranges::fill(nonce, std::byte{0x33});
+      [](auto &master_salt_v, auto &meta_salt_v, auto &ephemeral_salt_v,
+         auto &nonce_v) {
+        std::ranges::fill(meta_salt_v, std::byte{0x11});
+        std::ranges::fill(master_salt_v, std::byte{0x22});
+        std::ranges::fill(ephemeral_salt_v, std::byte{0x44});
+        std::ranges::fill(nonce_v, std::byte{0x33});
 
-        const auto header = vault::make_header(meta_salt, master_salt, nonce);
+        const auto header =
+            vault::make_header(meta_salt_v, master_salt_v, ephemeral_salt_v,
+                               nonce_v);
 
         auto it = header.begin();
 
         EXPECT_TRUE(std::ranges::equal(
-            meta_salt, std::ranges::subrange(it, it + meta_salt.size())));
+            meta_salt_v,
+            std::ranges::subrange(it, it + meta_salt_v.size())));
 
-        it += meta_salt.size();
+        it += meta_salt_v.size();
 
         EXPECT_TRUE(std::ranges::equal(
-            master_salt, std::ranges::subrange(it, it + master_salt.size())));
+            master_salt_v,
+            std::ranges::subrange(it, it + master_salt_v.size())));
 
-        it += master_salt.size();
+        it += master_salt_v.size();
+
         EXPECT_TRUE(std::ranges::equal(
-            nonce, std::ranges::subrange(it, it + nonce.size())));
+            ephemeral_salt_v,
+            std::ranges::subrange(it, it + ephemeral_salt_v.size())));
+
+        it += ephemeral_salt_v.size();
+
+        EXPECT_TRUE(std::ranges::equal(
+            nonce_v, std::ranges::subrange(it, it + nonce_v.size())));
       },
-      master_salt, meta_salt, nonce);
+      master_salt, meta_salt, ephemeral_salt, nonce);
 }
 
 TEST_F(VaultModelTest, MakeHeaderIsDeterministic) {
   Salt meta_salt{};
   Salt master_salt{};
+  Salt ephemeral_salt{};
   Nonce nonce{};
 
   std::visit(
-      [](auto &meta_salt, auto &master_salt, auto &nonce) {
-        std::ranges::fill(meta_salt, std::byte{0x11});
-        std::ranges::fill(master_salt, std::byte{0x22});
-        std::ranges::fill(nonce, std::byte{0x33});
+      [](auto &meta_salt_v, auto &master_salt_v, auto &ephemeral_salt_v,
+         auto &nonce_v) {
+        std::ranges::fill(meta_salt_v, std::byte{0x11});
+        std::ranges::fill(master_salt_v, std::byte{0x22});
+        std::ranges::fill(ephemeral_salt_v, std::byte{0x44});
+        std::ranges::fill(nonce_v, std::byte{0x33});
       },
-      meta_salt, master_salt, nonce);
+      meta_salt, master_salt, ephemeral_salt, nonce);
 
-  const auto header1 = vault::make_header(meta_salt, master_salt, nonce);
+  const auto header1 =
+      vault::make_header(meta_salt, master_salt, ephemeral_salt, nonce);
 
-  const auto header2 = vault::make_header(meta_salt, master_salt, nonce);
+  const auto header2 =
+      vault::make_header(meta_salt, master_salt, ephemeral_salt, nonce);
 
   EXPECT_EQ(header1, header2);
 }
@@ -67,18 +86,21 @@ TEST_F(VaultModelTest, MakeHeaderChangesWhenMetaSaltChanges) {
   Salt meta_salt1{};
   Salt meta_salt2{};
   Salt master_salt{};
+  Salt ephemeral_salt{};
   Nonce nonce{};
 
   std::visit(
-      [](auto &meta_salt1, auto &meta_salt2) {
-        std::ranges::fill(meta_salt1, std::byte{0x11});
-        std::ranges::fill(meta_salt2, std::byte{0x22});
+      [](auto &meta_salt_v1, auto &meta_salt_v2) {
+        std::ranges::fill(meta_salt_v1, std::byte{0x11});
+        std::ranges::fill(meta_salt_v2, std::byte{0x22});
       },
       meta_salt1, meta_salt2);
 
-  const auto header1 = vault::make_header(meta_salt1, master_salt, nonce);
+  const auto header1 =
+      vault::make_header(meta_salt1, master_salt, ephemeral_salt, nonce);
 
-  const auto header2 = vault::make_header(meta_salt2, master_salt, nonce);
+  const auto header2 =
+      vault::make_header(meta_salt2, master_salt, ephemeral_salt, nonce);
 
   EXPECT_NE(header1, header2);
 }
@@ -87,18 +109,44 @@ TEST_F(VaultModelTest, MakeHeaderChangesWhenMasterSaltChanges) {
   Salt meta_salt{};
   Salt master_salt1{};
   Salt master_salt2{};
+  Salt ephemeral_salt{};
   Nonce nonce{};
 
   std::visit(
-      [](auto &master_salt1, auto &master_salt2) {
-        std::ranges::fill(master_salt1, std::byte{0x11});
-        std::ranges::fill(master_salt2, std::byte{0x22});
+      [](auto &master_salt_v1, auto &master_salt_v2) {
+        std::ranges::fill(master_salt_v1, std::byte{0x11});
+        std::ranges::fill(master_salt_v2, std::byte{0x22});
       },
       master_salt1, master_salt2);
 
-  const auto header1 = vault::make_header(meta_salt, master_salt1, nonce);
+  const auto header1 =
+      vault::make_header(meta_salt, master_salt1, ephemeral_salt, nonce);
 
-  const auto header2 = vault::make_header(meta_salt, master_salt2, nonce);
+  const auto header2 =
+      vault::make_header(meta_salt, master_salt2, ephemeral_salt, nonce);
+
+  EXPECT_NE(header1, header2);
+}
+
+TEST_F(VaultModelTest, MakeHeaderChangesWhenEphemeralSaltChanges) {
+  Salt meta_salt{};
+  Salt master_salt{};
+  Salt ephemeral_salt1{};
+  Salt ephemeral_salt2{};
+  Nonce nonce{};
+
+  std::visit(
+      [](auto &ephemeral_salt_v1, auto &ephemeral_salt_v2) {
+        std::ranges::fill(ephemeral_salt_v1, std::byte{0x11});
+        std::ranges::fill(ephemeral_salt_v2, std::byte{0x22});
+      },
+      ephemeral_salt1, ephemeral_salt2);
+
+  const auto header1 =
+      vault::make_header(meta_salt, master_salt, ephemeral_salt1, nonce);
+
+  const auto header2 =
+      vault::make_header(meta_salt, master_salt, ephemeral_salt2, nonce);
 
   EXPECT_NE(header1, header2);
 }
@@ -106,19 +154,22 @@ TEST_F(VaultModelTest, MakeHeaderChangesWhenMasterSaltChanges) {
 TEST_F(VaultModelTest, MakeHeaderChangesWhenNonceChanges) {
   Salt meta_salt{};
   Salt master_salt{};
+  Salt ephemeral_salt{};
   Nonce nonce1{};
   Nonce nonce2{};
 
   std::visit(
-      [](auto &nonce1, auto &nonce2) {
-        std::ranges::fill(nonce1, std::byte{0x11});
-        std::ranges::fill(nonce2, std::byte{0x22});
+      [](auto &nonce_v1, auto &nonce_v2) {
+        std::ranges::fill(nonce_v1, std::byte{0x11});
+        std::ranges::fill(nonce_v2, std::byte{0x22});
       },
       nonce1, nonce2);
 
-  const auto header1 = vault::make_header(meta_salt, master_salt, nonce1);
+  const auto header1 =
+      vault::make_header(meta_salt, master_salt, ephemeral_salt, nonce1);
 
-  const auto header2 = vault::make_header(meta_salt, master_salt, nonce2);
+  const auto header2 =
+      vault::make_header(meta_salt, master_salt, ephemeral_salt, nonce2);
 
   EXPECT_NE(header1, header2);
 }

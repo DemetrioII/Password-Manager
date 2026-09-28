@@ -11,14 +11,13 @@ void vault::Vault::Init() {
   meta_salt_ = SaltManager::generateSalt<Argon2Salt>();
 }
 
-vault::Vault::Vault(SecureString &&password)
-    : session_key_(std::move(password)) {
+vault::Vault::Vault(SecureString &&password,
+                    const UnlockThrottle::Config &throttle_config)
+    : ephemeral_salt_(SaltManager::generateSalt<Argon2Salt>()),
+      session_key_(std::move(password), get<Argon2Salt>(ephemeral_salt_)),
+      throttle_(throttle_config) {
   test_magic_ciphertext =
       EncryptedField::encrypt(test_magic_plaintext, session_key_);
-  for (auto &i : test_magic_ciphertext.ciphertext) {
-    std::cout << std::hex << i << ' ';
-  }
-  std::cout << std::endl;
 }
 
 std::expected<void, vault::VaultError>
@@ -42,9 +41,12 @@ vault::Vault::Add(PasswordEntry &&entry) {
 std::expected<void, vault::VaultError>
 vault::Vault::Add(const std::string &title, const std::string &login,
                   const SecureString &password) {
-  return Add({.title = title,
+  return Add({.id = {},
+              .title = title,
               .login = login,
-              .password = EncryptedField::encrypt(password, session_key_)});
+              .password = EncryptedField::encrypt(password, session_key_),
+              .nonce = {},
+              .notes = {}});
 }
 
 std::expected<SecureString, vault::VaultError>
@@ -56,8 +58,12 @@ vault::Vault::ShowPassword(const UUID &id) const {
   if (!entry.has_value())
     return std::unexpected(VaultError::EntryNotFound);
 
-  auto s = (*entry)->password.decrypt(session_key_);
-  return s;
+  try {
+    SecureString s = (*entry)->password.decrypt(session_key_);
+    return s;
+  } catch (const CryptoError &) {
+    return std::unexpected(VaultError::CryptoError);
+  }
 }
 
 std::expected<void, vault::VaultError> vault::Vault::Remove(const UUID &id) {
@@ -68,6 +74,8 @@ std::expected<void, vault::VaultError> vault::Vault::Remove(const UUID &id) {
                    [&](const PasswordEntry &entry) { return entry.id == id; });
   if (it == entries_.end())
     return std::unexpected(VaultError::EntryNotFound);
+
+  wipe(*it);
 
   entries_.erase(it);
   return {};
@@ -86,30 +94,38 @@ vault::Vault::Find(const UUID &id) const {
 }
 
 const std::vector<vault::PasswordEntry> &vault::Vault::Entries() const {
-  return entries_;
+  static const std::vector<PasswordEntry> locked_placeholder;
+  return locked_ ? locked_placeholder : entries_;
 }
 
 void vault::Vault::Lock() {
   if (locked_)
     return;
 
+  for (auto &entry : entries_)
+    entry.wipeMetadata();
+
   session_key_.reset();
   locked_ = true;
 }
 
 bool vault::Vault::Unlock(SecureString &&password) {
-  auto new_potential_session_key = EphemeralKey(std::move(password));
+  auto new_potential_session_key =
+      EphemeralKey(std::move(password), get<Argon2Salt>(ephemeral_salt_));
   try {
     if (test_magic_ciphertext.decrypt(new_potential_session_key) ==
         test_magic_plaintext) {
+      throttle_.RecordSuccess();
       locked_ = false;
       session_key_ = std::move(new_potential_session_key);
       return true;
     } else {
+      throttle_.RecordFailure();
       locked_ = true;
       return false;
     }
-  } catch (const AuthenticationFailed &) {
+  } catch (const CryptoError &) {
+    throttle_.RecordFailure();
     locked_ = true;
     return false;
   }

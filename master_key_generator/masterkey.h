@@ -15,7 +15,7 @@
 
 class Key {
 public:
-  Key() { sodium_mlock(data_.data(), data_.size()); }
+  Key() { lock_memory_or_fail(data_.data(), data_.size()); }
 
   ~Key() {
     sodium_memzero(data_.data(), data_.size());
@@ -27,7 +27,7 @@ public:
 
   Key(Key &&other) noexcept : data_(other.data_) {
     sodium_memzero(other.data_.data(), other.data_.size());
-    sodium_mlock(data_.data(), data_.size());
+    lock_memory_or_fail(data_.data(), data_.size());
     sodium_munlock(other.data_.data(), other.data_.size());
   }
 
@@ -37,7 +37,7 @@ public:
 
       data_ = other.data_;
 
-      sodium_mlock(data_.data(), data_.size());
+      lock_memory_or_fail(data_.data(), data_.size());
 
       sodium_memzero(other.data_.data(), other.data_.size());
     }
@@ -47,8 +47,8 @@ public:
   std::span<const std::byte> bytes() const noexcept;
   std::span<std::byte> bytes() noexcept;
 
-  unsigned char *data() noexcept;
   const unsigned char *data() const noexcept;
+  unsigned char *data() noexcept;
 
   size_t size() const noexcept;
 

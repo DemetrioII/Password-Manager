@@ -11,26 +11,23 @@ SecureString EncryptedField::decrypt(const EphemeralKey &session_key) const {
 
   unsigned long long plain_text_size = 0;
 
-  std::visit(
-      [&plain_text, &session_key, this, &plain_text_size](const auto &nonce) {
-        const int result = crypto_aead_xchacha20poly1305_ietf_decrypt(
-            reinterpret_cast<unsigned char *>(plain_text.data()),
-            &plain_text_size,
+  plain_text.mutate([&](char *out) {
+    std::visit(
+        [&](const auto &nonce_value) {
+          const int result = crypto_aead_xchacha20poly1305_ietf_decrypt(
+              reinterpret_cast<unsigned char *>(out), &plain_text_size, nullptr,
 
-            nullptr,
+              ciphertext.data(), ciphertext.size(), nullptr, 0,
 
-            ciphertext.data(), ciphertext.size(),
+              reinterpret_cast<const unsigned char *>(nonce_value.data()),
+              session_key.data());
 
-            nullptr, 0,
-
-            reinterpret_cast<const unsigned char *>(nonce.data()),
-            session_key.data());
-
-        if (result != 0)
-          throw AuthenticationFailed(
-              "XChaCha20-Poly1305 authentication failed");
-      },
-      nonce);
+          if (result != 0)
+            throw AuthenticationFailed(
+                "XChaCha20-Poly1305 authentication failed");
+        },
+        nonce);
+  });
 
   if (plain_text_size != plain_text.size())
     throw CryptoError("Unknown error during the decryption");

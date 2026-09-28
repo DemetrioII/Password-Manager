@@ -1,4 +1,5 @@
 #include "UI.hpp"
+#include "process_hardening/process_hardening.h"
 #include <QApplication>
 
 vault::Vault create_the_vault() {
@@ -12,6 +13,8 @@ vault::Vault create_the_vault() {
 }
 
 int main(int argc, char *argv[]) {
+  hardening::apply();
+
   if (sodium_init() < 0)
     return 1;
 

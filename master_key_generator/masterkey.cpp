@@ -22,13 +22,13 @@ std::optional<Key> MasterKeyManager::deriveKey(SecureString &&password,
   Key key;
 
   std::visit(
-      [&password, &key](const auto &salt) {
+      [&password, &key](const auto &salt_value) {
         if (crypto_pwhash(key.data(), key.size(), password.view().data(),
                           password.view().size(),
-                          reinterpret_cast<const unsigned char *>(salt.data()),
-                          crypto_pwhash_OPSLIMIT_INTERACTIVE,
-                          crypto_pwhash_MEMLIMIT_INTERACTIVE,
-                          crypto_pwhash_ALG_DEFAULT) != 0) {
+                          reinterpret_cast<const unsigned char *>(
+                              salt_value.data()),
+                          kPwhashOpsLimit, kPwhashMemLimit, kPwhashAlgorithm) !=
+            0) {
           throw KDFError{""};
         }
       },

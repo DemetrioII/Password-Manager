@@ -7,19 +7,21 @@ SecureString CryptoService::cypher(const SecureString &password,
 
   unsigned long long ciphertext_size = 0;
 
-  std::visit(
-      [&ciphertext, &password, &ciphertext_size, &key](const auto &nonce) {
-        const int result = crypto_aead_xchacha20poly1305_ietf_encrypt(
-            reinterpret_cast<unsigned char *>(ciphertext.data()),
-            &ciphertext_size,
-            reinterpret_cast<const unsigned char *>(password.data()),
-            password.size(), nullptr, 0, nullptr,
-            reinterpret_cast<const unsigned char *>(nonce.data()), key.data());
+  ciphertext.mutate([&](char *out) {
+    std::visit(
+        [&](const auto &nonce_value) {
+          const int result = crypto_aead_xchacha20poly1305_ietf_encrypt(
+              reinterpret_cast<unsigned char *>(out), &ciphertext_size,
+              reinterpret_cast<const unsigned char *>(password.data()),
+              password.size(), nullptr, 0, nullptr,
+              reinterpret_cast<const unsigned char *>(nonce_value.data()),
+              key.data());
 
-        if (result != 0)
-          throw std::runtime_error("XChaCha20-Poly1305 encryption failed!");
-      },
-      nonce);
+          if (result != 0)
+            throw CryptoError("XChaCha20-Poly1305 encryption failed!");
+        },
+        nonce);
+  });
   return ciphertext;
 }
 
@@ -34,25 +36,24 @@ SecureString CryptoService::decypher(const SecureString &ciphertext,
 
   unsigned long long plain_text_size = 0;
 
-  std::visit(
-      [&password, &plain_text_size, &ciphertext, &key](const auto &nonce) {
-        int result = crypto_aead_xchacha20poly1305_ietf_decrypt(
-            reinterpret_cast<unsigned char *>(password.data()),
-            &plain_text_size,
+  password.mutate([&](char *out) {
+    std::visit(
+        [&](const auto &nonce_value) {
+          int result = crypto_aead_xchacha20poly1305_ietf_decrypt(
+              reinterpret_cast<unsigned char *>(out), &plain_text_size, nullptr,
 
-            nullptr,
+              reinterpret_cast<const unsigned char *>(ciphertext.data()),
+              ciphertext.size(),
 
-            reinterpret_cast<const unsigned char *>(ciphertext.data()),
-            ciphertext.size(),
+              nullptr, 0, reinterpret_cast<const unsigned char *>(nonce_value.data()),
+              key.data());
 
-            nullptr, 0, reinterpret_cast<const unsigned char *>(nonce.data()),
-            key.data());
-
-        if (result != 0)
-          throw AuthenticationFailed(
-              "XChaCha20-Poly1305 authentication failed");
-      },
-      nonce);
+          if (result != 0)
+            throw AuthenticationFailed(
+                "XChaCha20-Poly1305 authentication failed");
+        },
+        nonce);
+  });
   return password;
 }
 
@@ -67,16 +68,17 @@ CryptoService::encrypt(const char *plaintext, const std::size_t plaintext_size,
 
   std::visit(
       [&ciphertext, &plaintext, &ciphertext_size, &key, &plaintext_size, &AAD,
-       &AAD_size](const auto &nonce) {
+       &AAD_size](const auto &nonce_value) {
         const int result = crypto_aead_xchacha20poly1305_ietf_encrypt(
             reinterpret_cast<unsigned char *>(ciphertext.data()),
             &ciphertext_size,
             reinterpret_cast<const unsigned char *>(plaintext), plaintext_size,
             reinterpret_cast<const unsigned char *>(AAD), AAD_size, nullptr,
-            reinterpret_cast<const unsigned char *>(nonce.data()), key.data());
+            reinterpret_cast<const unsigned char *>(nonce_value.data()),
+            key.data());
 
         if (result != 0)
-          throw std::runtime_error("XChaCha20-Poly1305 encryption failed!");
+          throw CryptoError("XChaCha20-Poly1305 encryption failed!");
       },
       nonce);
   return ciphertext;
@@ -99,7 +101,7 @@ std::string CryptoService::decrypt(const char *ciphertext,
 
   std::visit(
       [&ciphertext, &plain_text_size, &ciphertext_size, &key, &plaintext, &AAD,
-       &AAD_size](const auto &nonce) {
+       &AAD_size](const auto &nonce_value) {
         int result = crypto_aead_xchacha20poly1305_ietf_decrypt(
             reinterpret_cast<unsigned char *>(plaintext.data()),
             &plain_text_size,
@@ -110,7 +112,8 @@ std::string CryptoService::decrypt(const char *ciphertext,
             ciphertext_size,
 
             reinterpret_cast<const unsigned char *>(AAD), AAD_size,
-            reinterpret_cast<const unsigned char *>(nonce.data()), key.data());
+            reinterpret_cast<const unsigned char *>(nonce_value.data()),
+            key.data());
 
         if (result != 0)
           throw AuthenticationFailed(

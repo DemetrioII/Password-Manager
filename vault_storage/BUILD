@@ -7,12 +7,14 @@ cc_library(
 		"safe_writer.cpp",
 		"vault_model.cpp",
 		"vault_serializer.cpp",
+		"unlock_throttle.cpp",
     ],
     hdrs = [
        "vault.h",
 	   "vault_model.hpp",
 	   "safe_writer.h",
 	   "vault_serializer.h",
+	   "unlock_throttle.h"
     ],
     deps = [
         "//vault_storage/proto:vault_cc_proto",

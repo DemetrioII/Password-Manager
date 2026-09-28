@@ -8,22 +8,18 @@ vault::VaultKeys vault::derive_keys_from_password(SecureString &&password,
   std::visit(
       [&password, &keys](const auto &meta_salt, const auto &master_salt) {
         if (crypto_pwhash(
-                keys.meta_key.data(), keys.meta_key.size(), password.data(),
-                password.size(),
+                keys.meta_key.data(), keys.meta_key.size(), password.view().data(),
+                password.view().size(),
                 reinterpret_cast<const unsigned char *>(meta_salt.data()),
-                crypto_pwhash_OPSLIMIT_INTERACTIVE,
-                crypto_pwhash_MEMLIMIT_INTERACTIVE,
-                crypto_pwhash_ALG_ARGON2ID13) != 0) {
+                kPwhashOpsLimit, kPwhashMemLimit, kPwhashAlgorithm) != 0) {
           throw KDFError("Out of memory during Argon2id");
         }
 
         if (crypto_pwhash(
-                keys.master_key.data(), keys.master_key.size(), password.data(),
-                password.size(),
+                keys.master_key.data(), keys.master_key.size(), password.view().data(),
+                password.view().size(),
                 reinterpret_cast<const unsigned char *>(master_salt.data()),
-                crypto_pwhash_OPSLIMIT_INTERACTIVE,
-                crypto_pwhash_MEMLIMIT_INTERACTIVE,
-                crypto_pwhash_ALG_ARGON2ID13) != 0) {
+                kPwhashOpsLimit, kPwhashMemLimit, kPwhashAlgorithm) != 0) {
           throw KDFError("Out of memory during Argon2id");
         }
       },
@@ -34,19 +30,21 @@ vault::VaultKeys vault::derive_keys_from_password(SecureString &&password,
 
 vault::VaultHeader vault::make_header(const Salt &meta_salt,
                                       const Salt &master_salt,
+                                      const Salt &ephemeral_salt,
                                       const Nonce &nonce) {
   VaultHeader header{};
 
   auto out = header.begin();
 
   std::visit(
-      [&out](const auto &meta_salt, const auto &master_salt,
-             const auto &nonce) {
-        out = std::copy(meta_salt.begin(), meta_salt.end(), out);
-        out = std::copy(master_salt.begin(), master_salt.end(), out);
-        std::copy(nonce.begin(), nonce.end(), out);
+      [&out](const auto &meta_salt_v, const auto &master_salt_v,
+             const auto &ephemeral_salt_v, const auto &nonce_v) {
+        out = std::copy(meta_salt_v.begin(), meta_salt_v.end(), out);
+        out = std::copy(master_salt_v.begin(), master_salt_v.end(), out);
+        out = std::copy(ephemeral_salt_v.begin(), ephemeral_salt_v.end(), out);
+        std::copy(nonce_v.begin(), nonce_v.end(), out);
       },
-      meta_salt, master_salt, nonce);
+      meta_salt, master_salt, ephemeral_salt, nonce);
 
   return header;
 }

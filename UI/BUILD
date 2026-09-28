@@ -37,5 +37,7 @@ qt_cc_binary(
     deps = [
         "@qt//:QtWidgets",
 		"//vault_storage:vault",
+		"//UI/forms:forms",
+		"//process_hardening:process_hardening",
     ],
 )

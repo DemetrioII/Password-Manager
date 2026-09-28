@@ -24,7 +24,7 @@ TEST(SecureString, ConstructsEmpty) {
   SecureString secure{std::size_t{0}};
 
   EXPECT_TRUE(secure.empty());
-  EXPECT_EQ(secure.size(), 0);
+  EXPECT_EQ(secure.size(), 0u);
   EXPECT_EQ(secure.view(), "");
 }
 
@@ -53,7 +53,7 @@ TEST(SecureString, AssignEmptyClearsContents) {
   secure.assign(nullptr, 0);
 
   EXPECT_TRUE(secure.empty());
-  EXPECT_EQ(secure.size(), 0);
+  EXPECT_EQ(secure.size(), 0u);
   EXPECT_EQ(secure.view(), "");
 }
 
@@ -63,7 +63,7 @@ TEST(SecureString, MoveConstructorTransfersOwnership) {
   SecureString moved{std::move(original)};
 
   EXPECT_EQ(moved.view(), "secret");
-  EXPECT_EQ(moved.size(), 6);
+  EXPECT_EQ(moved.size(), 6u);
 
   EXPECT_TRUE(original.empty());
   EXPECT_EQ(original.data(), nullptr);
@@ -76,7 +76,7 @@ TEST(SecureString, MoveAssignmentTransfersOwnership) {
   destination = std::move(source);
 
   EXPECT_EQ(destination.view(), "new secret");
-  EXPECT_EQ(destination.size(), 10);
+  EXPECT_EQ(destination.size(), 10u);
 
   EXPECT_TRUE(source.empty());
   EXPECT_EQ(source.data(), nullptr);
@@ -94,10 +94,13 @@ TEST(SecureString, MoveAssignmentReleasesPreviousContents) {
 TEST(SecureString, SelfMoveAssignmentDoesNothing) {
   SecureString secure{"secret"};
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wself-move"
   secure = std::move(secure);
+#pragma GCC diagnostic pop
 
   EXPECT_EQ(secure.view(), "secret");
-  EXPECT_EQ(secure.size(), 6);
+  EXPECT_EQ(secure.size(), 6u);
 }
 
 TEST(SecureString, InputOperatorReadsSecret) {

@@ -1,5 +1,6 @@
 #include "vault_storage/vault.h"
 
+#include <chrono>
 #include <string>
 #include <utility>
 
@@ -12,6 +13,14 @@ class VaultTest : public ::testing::Test {
 protected:
   static void SetUpTestSuite() { ASSERT_EQ(sodium_init(), 0); }
 };
+
+// A vault whose throttle is disabled, so unlock tests stay fast and
+// deterministic. Production code paths keep the default (enabled) throttle.
+vault::Vault VaultWithThrottlingDisabled(SecureString &&password) {
+  const vault::UnlockThrottle::Config disabled{
+      std::chrono::milliseconds::zero(), std::chrono::milliseconds::zero()};
+  return vault::Vault(std::move(password), disabled);
+}
 
 vault::PasswordEntry make_entry(std::string title = "GitHub",
                                 std::string login = "alice",
@@ -53,7 +62,7 @@ TEST_F(VaultTest, AddSucceeds) {
   auto result = vault.Add(make_entry());
 
   ASSERT_TRUE(result.has_value());
-  ASSERT_EQ(vault.Entries().size(), 1);
+  ASSERT_EQ(vault.Entries().size(), 1u);
 
   EXPECT_EQ(vault.Entries()[0].title, "GitHub");
   EXPECT_EQ(vault.Entries()[0].login, "alice");
@@ -66,11 +75,11 @@ TEST_F(VaultTest, AddGeneratesId) {
 
   ASSERT_TRUE(vault.Add(make_entry()));
 
-  ASSERT_EQ(vault.Entries().size(), 1);
+  ASSERT_EQ(vault.Entries().size(), 1u);
 
   const auto &id = vault.Entries()[0].id;
 
-  EXPECT_EQ(id.size(), 16);
+  EXPECT_EQ(id.size(), 16u);
 }
 
 TEST_F(VaultTest, AddGeneratesUuidV4) {
@@ -81,7 +90,7 @@ TEST_F(VaultTest, AddGeneratesUuidV4) {
 
   const auto &id = vault.Entries()[0].id;
 
-  ASSERT_EQ(id.size(), 16);
+  ASSERT_EQ(id.size(), 16u);
 
   // Version = 4.
   EXPECT_EQ(static_cast<unsigned char>(id[6]) & 0xF0, 0x40);
@@ -97,7 +106,7 @@ TEST_F(VaultTest, AddGeneratesDifferentIds) {
   ASSERT_TRUE(vault.Add(make_entry("GitHub", "alice")));
   ASSERT_TRUE(vault.Add(make_entry("Google", "bob")));
 
-  ASSERT_EQ(vault.Entries().size(), 2);
+  ASSERT_EQ(vault.Entries().size(), 2u);
 
   EXPECT_NE(vault.Entries()[0].id, vault.Entries()[1].id);
 }
@@ -110,7 +119,7 @@ TEST_F(VaultTest, AddPreservesEntryData) {
 
   ASSERT_TRUE(vault.Add(std::move(entry)));
 
-  ASSERT_EQ(vault.Entries().size(), 1);
+  ASSERT_EQ(vault.Entries().size(), 1u);
 
   const auto &stored = vault.Entries()[0];
 
@@ -214,7 +223,7 @@ TEST_F(VaultTest, RemoveOnlySpecifiedEntry) {
 
   ASSERT_TRUE(vault.Remove(first_id));
 
-  ASSERT_EQ(vault.Entries().size(), 1);
+  ASSERT_EQ(vault.Entries().size(), 1u);
 
   EXPECT_EQ(vault.Entries()[0].id, second_id);
 
@@ -235,7 +244,7 @@ TEST_F(VaultTest, RemoveFirstEntryKeepsRemainingEntries) {
 
   ASSERT_TRUE(vault.Remove(first_id));
 
-  ASSERT_EQ(vault.Entries().size(), 2);
+  ASSERT_EQ(vault.Entries().size(), 2u);
 
   EXPECT_EQ(vault.Entries()[0].title, "Second");
   EXPECT_EQ(vault.Entries()[1].title, "Third");
@@ -257,7 +266,7 @@ TEST_F(VaultTest, EntriesReturnsAllEntries) {
 
   const auto &entries = vault.Entries();
 
-  ASSERT_EQ(entries.size(), 3);
+  ASSERT_EQ(entries.size(), 3u);
 
   EXPECT_EQ(entries[0].title, "First");
   EXPECT_EQ(entries[1].title, "Second");
@@ -277,6 +286,76 @@ TEST_F(VaultTest, EntriesPreservesInsertionOrder) {
   ASSERT_EQ(vault.Entries()[0].title, "A");
   ASSERT_EQ(vault.Entries()[1].title, "B");
   ASSERT_EQ(vault.Entries()[2].title, "C");
+}
+
+// -----------------------------------------------------------------------------
+// Lock / Unlock
+// -----------------------------------------------------------------------------
+
+TEST_F(VaultTest, LockThenUnlockWithCorrectPasswordRestoresAccess) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"master-password"});
+  vault.Init();
+
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"super-secret"}));
+  const auto id = vault.Entries()[0].id;
+
+  vault.Lock();
+  ASSERT_TRUE(vault.locked());
+
+  ASSERT_TRUE(vault.Unlock(SecureString{"master-password"}));
+
+  auto password = vault.ShowPassword(id);
+  ASSERT_TRUE(password.has_value());
+  EXPECT_EQ(password->view(), "super-secret");
+}
+
+TEST_F(VaultTest, UnlockWithWrongPasswordFails) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"master-password"});
+  vault.Init();
+
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"super-secret"}));
+
+  vault.Lock();
+
+  EXPECT_FALSE(vault.Unlock(SecureString{"wrong-password"}));
+}
+
+TEST_F(VaultTest, LockedVaultRejectsSensitiveOperations) {
+  vault::Vault vault{SecureString{"master-password"}};
+  vault.Init();
+
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"super-secret"}));
+  const auto id = vault.Entries()[0].id;
+
+  vault.Lock();
+
+  EXPECT_EQ(vault.ShowPassword(id).error(), vault::VaultError::VaultLocked);
+}
+
+TEST_F(VaultTest, LockedVaultExposesNoEntries) {
+  vault::Vault vault{SecureString{"master-password"}};
+  vault.Init();
+
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"super-secret"}));
+
+  vault.Lock();
+
+  EXPECT_TRUE(vault.Entries().empty());
+}
+
+TEST_F(VaultTest, ThrottleNeverRefusesCorrectPassword) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"master-password"});
+  vault.Init();
+
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"super-secret"}));
+
+  vault.Lock();
+
+  for (int i = 0; i < 50; ++i)
+    EXPECT_FALSE(vault.Unlock(SecureString{"wrong-password"}));
+
+  ASSERT_TRUE(vault.Unlock(SecureString{"master-password"}));
+  EXPECT_FALSE(vault.locked());
 }
 
 // -----------------------------------------------------------------------------

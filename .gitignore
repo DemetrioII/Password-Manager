@@ -17,4 +17,6 @@ MODULE.bazel.lock
 vault.nonce
 external/
 *.bin
+PLAN.md 
+AGENTS.md 
 *.nonce

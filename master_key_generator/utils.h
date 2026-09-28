@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sodium.h>
+#include <stdexcept>
 #include <string>
 #include <variant>
 
@@ -13,6 +14,13 @@
 #define MAX_LOGIN_SIZE 1024
 #define MAX_NOTES_SIZE 2048
 #define MAX_PASSWORD_CIPHERTEXT_SIZE 2048
+
+// Argon2id parameters, shared by every key derivation call site so they cannot
+// drift apart. MODERATE is deliberately used instead of INTERACTIVE: password
+// managers need stronger resistance to offline master-password brute force.
+constexpr std::size_t kPwhashOpsLimit = crypto_pwhash_OPSLIMIT_MODERATE;
+constexpr std::size_t kPwhashMemLimit = crypto_pwhash_MEMLIMIT_MODERATE;
+constexpr int kPwhashAlgorithm = crypto_pwhash_ALG_ARGON2ID13;
 
 enum class KeyManagerError {
   FileNotFound,
@@ -72,8 +80,9 @@ public:
     }
 
     std::visit(
-        [&nonce_file](auto &nonce) {
-          nonce_file.read(reinterpret_cast<char *>(nonce.data()), nonce.size());
+        [&nonce_file](auto &nonce_value) {
+          nonce_file.read(reinterpret_cast<char *>(nonce_value.data()),
+                          nonce_value.size());
         },
         nonce);
 
@@ -86,9 +95,9 @@ public:
   static void write_to_file(const std::string &file_path, const Nonce &nonce) {
     std::ofstream nonce_file(file_path, std::ios::binary);
     std::visit(
-        [&nonce_file](const auto &nonce) {
-          nonce_file.write(reinterpret_cast<const char *>(nonce.data()),
-                           nonce.size());
+        [&nonce_file](const auto &nonce_value) {
+          nonce_file.write(reinterpret_cast<const char *>(nonce_value.data()),
+                           nonce_value.size());
         },
         nonce);
   }
@@ -137,3 +146,9 @@ public:
     return salt;
   }
 };
+
+inline void lock_memory_or_fail(void *ptr, std::size_t size) {
+  if (sodium_mlock(ptr, size) != 0) {
+    throw std::runtime_error{"MLOCK failed: RLIMIT_MEMLOCK exhausted"};
+  }
+}

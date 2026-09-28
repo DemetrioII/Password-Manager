@@ -23,6 +23,38 @@ TEST(EphemeralKey, TwoKeysAreNotDifferent) {
   EXPECT_NE(std::memcmp(first.data(), second.data(), EphemeralKey::size()), 0);
 }
 
+TEST(EphemeralKey, DerivesSameKeyFromSamePasswordAndSalt) {
+  const Salt salt = SaltManager::generateSalt<Argon2Salt>();
+
+  EphemeralKey first{SecureString{"correct horse battery staple"},
+                     get<Argon2Salt>(salt)};
+  EphemeralKey second{SecureString{"correct horse battery staple"},
+                      get<Argon2Salt>(salt)};
+
+  EXPECT_EQ(std::memcmp(first.data(), second.data(), EphemeralKey::size()), 0);
+}
+
+TEST(EphemeralKey, DifferentSaltsProduceDifferentKeys) {
+  const Salt salt1 = SaltManager::generateSalt<Argon2Salt>();
+  const Salt salt2 = SaltManager::generateSalt<Argon2Salt>();
+
+  EphemeralKey first{SecureString{"correct horse battery staple"},
+                     get<Argon2Salt>(salt1)};
+  EphemeralKey second{SecureString{"correct horse battery staple"},
+                      get<Argon2Salt>(salt2)};
+
+  EXPECT_NE(std::memcmp(first.data(), second.data(), EphemeralKey::size()), 0);
+}
+
+TEST(EphemeralKey, DifferentPasswordsProduceDifferentKeys) {
+  const Salt salt = SaltManager::generateSalt<Argon2Salt>();
+
+  EphemeralKey first{SecureString{"password1"}, get<Argon2Salt>(salt)};
+  EphemeralKey second{SecureString{"password2"}, get<Argon2Salt>(salt)};
+
+  EXPECT_NE(std::memcmp(first.data(), second.data(), EphemeralKey::size()), 0);
+}
+
 TEST(EphemeralKey, MoveConstructorTransfersKey) {
   EphemeralKey original;
 
@@ -78,7 +110,22 @@ TEST(EphemeralKey, SelfMoveAssignmentDoesNothing) {
   std::array<unsigned char, EphemeralKey::size()> before;
   std::memcpy(before.data(), key.data(), before.size());
 
+  #pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wself-move"
   key = std::move(key);
+#pragma GCC diagnostic pop
 
   EXPECT_EQ(std::memcmp(key.data(), before.data(), before.size()), 0);
+}
+
+class SodiumEnvironment : public ::testing::Environment {
+public:
+  void SetUp() override { ASSERT_EQ(sodium_init(), 0); }
+};
+
+int main(int argc, char **argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+
+  ::testing::AddGlobalTestEnvironment(new SodiumEnvironment);
+  return RUN_ALL_TESTS();
 }

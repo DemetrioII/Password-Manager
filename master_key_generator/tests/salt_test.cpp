@@ -23,7 +23,9 @@ TEST_F(SaltTest, GenerateHasCorrectSize) {
   const auto salt = SaltManager::generateSalt<Argon2Salt>();
 
   std::visit(
-      [](const auto &salt) { EXPECT_EQ(salt.size(), crypto_pwhash_SALTBYTES); },
+      [](const auto &salt_value) {
+        EXPECT_EQ(salt_value.size(), crypto_pwhash_SALTBYTES);
+      },
       salt);
 }
 
@@ -31,9 +33,9 @@ TEST_F(SaltTest, GeneratedSaltIsNotAllZeroes) {
   const auto salt = SaltManager::generateSalt<Argon2Salt>();
 
   std::visit(
-      [](const auto &salt) {
+      [](const auto &salt_value) {
         const bool all_zero =
-            std::all_of(salt.begin(), salt.end(),
+            std::all_of(salt_value.begin(), salt_value.end(),
                         [](std::byte value) { return value == std::byte{0}; });
 
         EXPECT_FALSE(all_zero);
@@ -98,9 +100,9 @@ TEST_F(SaltTest, ExtraBytesAreIgnored) {
     std::ofstream file(path, std::ios::binary);
 
     std::visit(
-        [&file](const auto &original) {
-          file.write(reinterpret_cast<const char *>(original.data()),
-                     original.size());
+        [&file](const auto &original_value) {
+          file.write(reinterpret_cast<const char *>(original_value.data()),
+                     original_value.size());
         },
         original);
 

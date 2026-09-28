@@ -1,5 +1,7 @@
 #include "master_key_generator/securestring.h"
 #include <cstring>
+#include <exception>
+#include <stdexcept>
 
 SecureString::SecureString(std::string_view data) {
   assign(data.data(), data.size());
@@ -13,6 +15,7 @@ SecureString::SecureString(std::size_t size) {
   if (!data_)
     throw std::bad_alloc();
   size_ = size;
+  make_readonly();
 }
 
 std::string_view SecureString::view() const noexcept {
@@ -27,10 +30,7 @@ SecureString::SecureString(SecureString &&other) noexcept
 
 SecureString &SecureString::operator=(SecureString &&other) noexcept {
   if (this != &other) {
-    if (data_) {
-      sodium_memzero(data_, size_);
-      sodium_free(data_);
-    }
+    clear();
     data_ = std::exchange(other.data_, nullptr);
     size_ = std::exchange(other.size_, 0);
   }
@@ -49,30 +49,41 @@ void SecureString::assign(const char *data, std::size_t size) {
 
   std::copy_n(data, size, data_);
   size_ = size;
-  // sodium_mprotect_readonly(data_);
+  make_readonly();
+}
+
+void SecureString::make_readonly() noexcept {
+  if (data_ == nullptr)
+    return;
+  if (sodium_mprotect_readonly(data_) != 0)
+    std::terminate();
+}
+
+void SecureString::make_writable() {
+  if (data_ == nullptr)
+    return;
+  if (sodium_mprotect_readwrite(data_) != 0)
+    throw std::runtime_error("SecureString: failed to make buffer writable");
 }
 
 void SecureString::clear() noexcept {
   if (data_) {
-    sodium_memzero(data_, size_);
+    // If the page cannot be made writable, do not attempt to zero it (that
+    // would crash on a PROT_READ page); sodium_free() releases it regardless.
+    if (sodium_mprotect_readwrite(data_) == 0)
+      sodium_memzero(data_, size_);
     sodium_free(data_);
     data_ = nullptr;
   }
   size_ = 0;
 }
 
-SecureString::~SecureString() {
-  if (data_) {
-    sodium_memzero(data_, size_);
-    // sodium_mprotect_readwrite(data_);
-    sodium_free(data_);
-  }
-}
+SecureString::~SecureString() { clear(); }
 
 bool operator==(const SecureString &lhs, const SecureString &rhs) {
   if (lhs.size_ != rhs.size_)
     return false;
-  if (strncmp(lhs.data_, rhs.data_, std::min(lhs.size_, rhs.size_)) == 0)
+  if (lhs.size_ == 0)
     return true;
-  return false;
+  return sodium_memcmp(lhs.data_, rhs.data_, lhs.size_) == 0;
 }

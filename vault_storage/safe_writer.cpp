@@ -1,47 +1,59 @@
 #include "vault_storage/safe_writer.h"
 
+#include <cerrno>
+#include <cstddef>
+#include <string>
+#include <vector>
+
 std::expected<void, vault::FileIoError>
 SafeFileWriter::WriteAtomic(const std::filesystem::path &target_path,
                             const std::vector<unsigned char> &data) {
-  std::filesystem::path temp_path = target_path;
-  temp_path += ".tmp." + std::to_string(getpid());
+  // mkstemp creates the file with 0600 permissions regardless of umask and
+  // fails if the name already exists, avoiding temp-file collisions.
+  std::string pattern = target_path.string() + ".tmp." +
+                        std::to_string(getpid()) + ".XXXXXX";
+  std::vector<char> templ(pattern.begin(), pattern.end());
+  templ.push_back('\0');
 
-  std::ofstream file(temp_path, std::ios::binary | std::ios::trunc);
-  if (!file.is_open()) {
+  const int fd = ::mkstemp(templ.data());
+  if (fd == -1)
     return std::unexpected(vault::FileIoError::TempFileCreationFailed);
+
+  const std::filesystem::path temp_path(templ.data());
+
+  const char *buffer = reinterpret_cast<const char *>(data.data());
+  std::size_t remaining = data.size();
+
+  while (remaining > 0) {
+    const ssize_t written = ::write(fd, buffer, remaining);
+    if (written < 0) {
+      if (errno == EINTR)
+        continue;
+      ::close(fd);
+      std::filesystem::remove(temp_path);
+      return std::unexpected(vault::FileIoError::WriteFailed);
+    }
+    if (written == 0)
+      break;
+    buffer += written;
+    remaining -= static_cast<std::size_t>(written);
   }
 
-  std::error_code ec;
-  std::filesystem::permissions(temp_path,
-                               std::filesystem::perms::owner_read |
-                                   std::filesystem::perms::owner_write,
-                               std::filesystem::perm_options::replace, ec);
-
-  if (ec) {
-    std::filesystem::remove(temp_path, ec);
-    return std::unexpected(vault::FileIoError::PermissionSetFailed);
-  }
-
-  file.write(reinterpret_cast<const char *>(data.data()), data.size());
-  if (!file.good()) {
-    file.close();
-    std::filesystem::remove(temp_path, ec);
+  if (remaining > 0) {
+    ::close(fd);
+    std::filesystem::remove(temp_path);
     return std::unexpected(vault::FileIoError::WriteFailed);
   }
 
-  file.flush();
-
-  file.close();
-
-  int fd = ::open(temp_path.c_str(), O_WRONLY);
-  if (fd != -1) {
-    ::fsync(fd);
+  if (::fsync(fd) != 0) {
     ::close(fd);
-  } else {
-    std::filesystem::remove(temp_path, ec);
+    std::filesystem::remove(temp_path);
     return std::unexpected(vault::FileIoError::SyncFailed);
   }
 
+  ::close(fd);
+
+  std::error_code ec;
   std::filesystem::rename(temp_path, target_path, ec);
   if (ec) {
     std::filesystem::remove(temp_path, ec);
@@ -54,8 +66,8 @@ SafeFileWriter::WriteAtomic(const std::filesystem::path &target_path,
 }
 
 void SafeFileWriter::sync_directory(const std::filesystem::path &dir_path) {
-  auto path_to_open = dir_path.empty() ? "." : dir_path;
-  int dir_fd = ::open(dir_path.c_str(), O_RDONLY | O_DIRECTORY);
+  const auto path_to_open = dir_path.empty() ? "." : dir_path;
+  const int dir_fd = ::open(path_to_open.c_str(), O_RDONLY | O_DIRECTORY);
   if (dir_fd != -1) {
     ::fsync(dir_fd);
     ::close(dir_fd);

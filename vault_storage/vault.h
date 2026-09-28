@@ -2,6 +2,7 @@
 #include "crypto_service/crypto.h"
 #include "vault_storage/proto/vault.pb.h"
 #include "vault_storage/safe_writer.h"
+#include "vault_storage/unlock_throttle.h"
 #include "vault_storage/vault_model.hpp"
 #include <expected>
 #include <fcntl.h>
@@ -27,11 +28,14 @@ public:
 
   std::expected<SecureString, VaultError> ShowPassword(const UUID &) const;
 
-  Vault(SecureString &&password);
+  Vault(SecureString &&password,
+        const UnlockThrottle::Config &throttle_config = {});
 
   void Lock();
 
   bool Unlock(SecureString &&);
+
+  bool locked() const noexcept { return locked_; }
 
   void Init();
 
@@ -41,8 +45,10 @@ private:
   std::vector<PasswordEntry> entries_;
   Salt meta_salt_;
   Salt master_salt_;
+  Salt ephemeral_salt_;
   EphemeralKey session_key_;
   bool locked_ = false;
+  UnlockThrottle throttle_;
 
   SecureString test_magic_plaintext{"LENIN"};
   EncryptedField test_magic_ciphertext;

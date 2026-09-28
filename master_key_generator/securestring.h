@@ -25,9 +25,18 @@ public:
 
   [[nodiscard]] const char *data() const noexcept { return data_; }
 
-  char *data() noexcept { return data_; }
-
   [[nodiscard]] bool empty() const noexcept { return size_ == 0; }
+
+  // Runs `fn` while the buffer is temporarily writable, then restores the
+  // read-only state. The buffer is re-protected even if `fn` throws.
+  template <typename Fn> void mutate(Fn &&fn) {
+    make_writable();
+    struct Restore {
+      SecureString &owner_;
+      ~Restore() noexcept { owner_.make_readonly(); }
+    } restore{*this};
+    std::forward<Fn>(fn)(data_);
+  }
 
   friend std::istream &operator>>(std::istream &is, SecureString &ss) {
     std::string buf;
@@ -45,6 +54,9 @@ public:
   std::size_t size() const noexcept;
 
 private:
+  void make_readonly() noexcept;
+  void make_writable();
+
   char *data_ = nullptr;
   std::size_t size_ = 0;
 };

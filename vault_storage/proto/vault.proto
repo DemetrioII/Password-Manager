@@ -20,4 +20,5 @@ message VaultProto {
   bytes master_salt = 2;
   bytes meta_salt = 3;
   bytes entries = 4;
+  bytes ephemeral_salt = 5;
 }

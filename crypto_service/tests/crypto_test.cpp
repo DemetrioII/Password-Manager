@@ -137,11 +137,12 @@ TEST(CryptoService, ModifiedCiphertextFailsAuthentication) {
 
   auto ciphertext = CryptoService::cypher(plaintext, nonce, key);
 
-  ASSERT_GT(ciphertext.size(), 0);
+  ASSERT_GT(ciphertext.size(), 0u);
 
-  ciphertext.data()[0] ^= 0x01;
+  std::string corrupted{ciphertext.view()};
+  corrupted[0] ^= 0x01;
 
-  EXPECT_THROW(CryptoService::decypher(ciphertext, nonce, key),
+  EXPECT_THROW(CryptoService::decypher(SecureString{corrupted}, nonce, key),
                AuthenticationFailed);
 }
 
@@ -153,16 +154,15 @@ TEST(CryptoService, EveryCiphertextByteIsAuthenticated) {
 
   auto ciphertext = CryptoService::cypher(plaintext, nonce, key);
 
+  std::string clean{ciphertext.view()};
+
   for (std::size_t i = 0; i < ciphertext.size(); ++i) {
-    const auto original = ciphertext.data()[i];
+    std::string corrupted = clean;
+    corrupted[i] ^= 0x01;
 
-    ciphertext.data()[i] ^= 0x01;
-
-    EXPECT_THROW(CryptoService::decypher(ciphertext, nonce, key),
+    EXPECT_THROW(CryptoService::decypher(SecureString{corrupted}, nonce, key),
                  AuthenticationFailed)
         << "Modified byte: " << i;
-
-    ciphertext.data()[i] = original;
   }
 }
 
@@ -220,7 +220,8 @@ TEST(CryptoService, UnicodeRoundTrip) {
 }
 
 int main(int argc, char **argv) {
-  sodium_init();
+  if (sodium_init() < 0)
+    return 1;
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }

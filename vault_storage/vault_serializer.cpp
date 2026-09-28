@@ -1,22 +1,31 @@
 #include "vault_storage/vault_serializer.h"
 
+#include <unordered_set>
+
 std::expected<void, vault::VaultError>
 vault::Serializator::serialize(SecureString &&password,
                                const std::string &file_path,
                                const vault::Vault &vault) {
+  if (vault.locked())
+    return std::unexpected(vault::VaultError::VaultLocked);
+
   password_manager::VaultProto proto;
   password_manager::EncryptedEntries entries;
 
   std::visit(
-      [&proto](const auto &meta_salt, const auto &master_salt) {
+      [&proto](const auto &meta_salt, const auto &master_salt,
+               const auto &ephemeral_salt) {
         proto.set_meta_salt(
             reinterpret_cast<const unsigned char *>(meta_salt.data()),
             meta_salt.size());
         proto.set_master_salt(
             reinterpret_cast<const unsigned char *>(master_salt.data()),
             master_salt.size());
+        proto.set_ephemeral_salt(
+            reinterpret_cast<const unsigned char *>(ephemeral_salt.data()),
+            ephemeral_salt.size());
       },
-      vault.meta_salt_, vault.master_salt_);
+      vault.meta_salt_, vault.master_salt_, vault.ephemeral_salt_);
 
   vault::VaultKeys keys;
   try {
@@ -29,7 +38,8 @@ vault::Serializator::serialize(SecureString &&password,
   Nonce vault_nonce = NonceManager::generate<XChaCha20Poly1305Nonce>();
 
   vault::VaultHeader header =
-      vault::make_header(vault.meta_salt_, vault.master_salt_, vault_nonce);
+      vault::make_header(vault.meta_salt_, vault.master_salt_,
+                         vault.ephemeral_salt_, vault_nonce);
 
   for (const auto &entry : vault.Entries()) {
     auto *e = entries.add_entries();
@@ -50,9 +60,9 @@ vault::Serializator::serialize(SecureString &&password,
     }
 
     std::visit(
-        [&e](const auto &nonce) {
-          e->set_nonce(reinterpret_cast<const char *>(nonce.data()),
-                       nonce.size());
+        [&e](const auto &nonce_value) {
+          e->set_nonce(reinterpret_cast<const char *>(nonce_value.data()),
+                       nonce_value.size());
         },
         nonce);
 
@@ -68,14 +78,14 @@ vault::Serializator::serialize(SecureString &&password,
     encrypted = CryptoService::encrypt(serialized.data(), serialized.size(),
                                        header.data(), header.size(),
                                        vault_nonce, keys.meta_key);
-  } catch (const KDFError &) {
+  } catch (const CryptoError &) {
     return std::unexpected(VaultError::CryptoError);
   }
 
   std::visit(
-      [&proto](const auto &vault_nonce) {
-        proto.set_nonce(reinterpret_cast<const char *>(vault_nonce.data()),
-                        vault_nonce.size());
+      [&proto](const auto &vault_nonce_v) {
+        proto.set_nonce(reinterpret_cast<const char *>(vault_nonce_v.data()),
+                        vault_nonce_v.size());
       },
       vault_nonce);
 
@@ -118,6 +128,9 @@ vault::Serializator::deserialize(SecureString &&password,
   if (size <= 0)
     return std::unexpected(vault::VaultError::VaultCorrupted);
 
+  if (static_cast<std::size_t>(size) > MAX_VAULT_SIZE)
+    return std::unexpected(vault::VaultError::VaultCorrupted);
+
   std::string serialized_file(size, '\0');
 
   if (!file.read(serialized_file.data(), size))
@@ -128,22 +141,26 @@ vault::Serializator::deserialize(SecureString &&password,
 
   if (proto.meta_salt().size() != crypto_pwhash_SALTBYTES ||
       proto.master_salt().size() != crypto_pwhash_SALTBYTES ||
-      proto.nonce().size() != crypto_aead_xchacha20poly1305_ietf_NPUBBYTES)
+      proto.nonce().size() != crypto_aead_xchacha20poly1305_ietf_NPUBBYTES ||
+      proto.ephemeral_salt().size() != crypto_pwhash_SALTBYTES)
     return std::unexpected(vault::VaultError::VaultCorrupted);
 
   Nonce nonce;
 
-  Salt master_salt, meta_salt;
+  Salt master_salt, meta_salt, ephemeral_salt;
   std::visit(
-      [&proto](auto &master_salt, auto &meta_salt, auto &nonce) {
-        std::memcpy(master_salt.data(), proto.master_salt().data(),
+      [&proto](auto &master_salt_v, auto &meta_salt_v, auto &ephemeral_salt_v,
+               auto &nonce_v) {
+        std::memcpy(master_salt_v.data(), proto.master_salt().data(),
                     crypto_pwhash_SALTBYTES);
-        std::memcpy(meta_salt.data(), proto.meta_salt().data(),
+        std::memcpy(meta_salt_v.data(), proto.meta_salt().data(),
                     crypto_pwhash_SALTBYTES);
-        std::memcpy(nonce.data(), proto.nonce().data(),
+        std::memcpy(ephemeral_salt_v.data(), proto.ephemeral_salt().data(),
+                    crypto_pwhash_SALTBYTES);
+        std::memcpy(nonce_v.data(), proto.nonce().data(),
                     crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
       },
-      master_salt, meta_salt, nonce);
+      master_salt, meta_salt, ephemeral_salt, nonce);
 
   vault::VaultKeys keys;
   try {
@@ -158,7 +175,8 @@ vault::Serializator::deserialize(SecureString &&password,
   if (encrypted_entries.size() < crypto_aead_xchacha20poly1305_ietf_ABYTES)
     return std::unexpected(vault::VaultError::VaultCorrupted);
 
-  vault::VaultHeader header = vault::make_header(meta_salt, master_salt, nonce);
+  vault::VaultHeader header =
+      vault::make_header(meta_salt, master_salt, ephemeral_salt, nonce);
 
   std::string decrypted;
 
@@ -176,12 +194,33 @@ vault::Serializator::deserialize(SecureString &&password,
   sodium_memzero(decrypted.data(), decrypted.size());
   decrypted.clear();
 
-  // 🛡️ Временный буфер для транзакционности
+  if (entries.entries_size() > MAX_ENTRIES)
+    return std::unexpected(vault::VaultError::VaultCorrupted);
+
+  EphemeralKey new_session_key(std::move(password),
+                               get<Argon2Salt>(ephemeral_salt));
+
+  EncryptedField new_magic_ciphertext =
+      EncryptedField::encrypt(vault.test_magic_plaintext, new_session_key);
+
+  // 🛡️ Temporary buffer for transactionality: the vault is only mutated after
+  // every entry has been validated, so a failed load cannot leave it in a
+  // half-initialised state (e.g. old entries paired with a new session key).
   std::vector<vault::PasswordEntry> temp_entries;
   temp_entries.reserve(entries.entries_size());
+  std::unordered_set<std::string> seen_ids;
+  seen_ids.reserve(entries.entries_size());
 
   for (const auto &e : entries.entries()) {
     if (e.nonce().size() != crypto_aead_xchacha20poly1305_ietf_NPUBBYTES)
+      return std::unexpected(vault::VaultError::VaultCorrupted);
+
+    if (e.id().empty() || !seen_ids.insert(e.id()).second)
+      return std::unexpected(vault::VaultError::VaultCorrupted);
+
+    if (e.title().size() > MAX_TITLE_SIZE ||
+        e.login().size() > MAX_LOGIN_SIZE || e.notes().size() > MAX_NOTES_SIZE ||
+        e.password().size() > MAX_PASSWORD_CIPHERTEXT_SIZE)
       return std::unexpected(vault::VaultError::VaultCorrupted);
 
     vault::PasswordEntry entry;
@@ -194,9 +233,9 @@ vault::Serializator::deserialize(SecureString &&password,
     Nonce password_nonce;
 
     std::visit(
-        [&e](auto &password_nonce) {
-          std::memcpy(password_nonce.data(), e.nonce().data(),
-                      password_nonce.size());
+        [&e](auto &password_nonce_v) {
+          std::memcpy(password_nonce_v.data(), e.nonce().data(),
+                      password_nonce_v.size());
         },
         password_nonce);
 
@@ -204,7 +243,7 @@ vault::Serializator::deserialize(SecureString &&password,
       SecureString plaintext = CryptoService::decypher(
           SecureString{e.password()}, password_nonce, keys.master_key);
 
-      entry.password = EncryptedField::encrypt(plaintext, vault.session_key_);
+      entry.password = EncryptedField::encrypt(plaintext, new_session_key);
     } catch (const CryptoError &) {
       return std::unexpected(vault::VaultError::CryptoError);
     }
@@ -212,6 +251,11 @@ vault::Serializator::deserialize(SecureString &&password,
     temp_entries.push_back(std::move(entry));
   }
 
+  vault.session_key_ = std::move(new_session_key);
+  vault.meta_salt_ = meta_salt;
+  vault.master_salt_ = master_salt;
+  vault.ephemeral_salt_ = ephemeral_salt;
+  vault.test_magic_ciphertext = std::move(new_magic_ciphertext);
   vault.entries_ = std::move(temp_entries);
 
   return {};

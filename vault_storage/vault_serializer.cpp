@@ -12,6 +12,26 @@ vault::Serializator::serialize(SecureString &&password,
   password_manager::VaultProto proto;
   password_manager::EncryptedEntries entries;
 
+  const vault::VaultDescriptor descriptor{
+      .version = vault::kVaultFormatVersion,
+      .kdf_algorithm = vault::kKdfAlgorithmArgon2id13,
+      .kdf_ops_limit = vault.kdf_.ops_limit,
+      .kdf_mem_limit = vault.kdf_.mem_limit,
+      .salt_algorithm = vault::kSaltAlgorithmArgon2,
+      .nonce_algorithm = vault::kNonceAlgorithmXChaCha20Poly1305,
+      .cipher_algorithm = vault::kCipherAlgorithmXChaCha20Poly1305,
+  };
+
+  proto.set_version(descriptor.version);
+  proto.set_salt_algorithm(password_manager::SALT_ALGORITHM_ARGON2);
+  proto.set_nonce_algorithm(
+      password_manager::NONCE_ALGORITHM_XCHACHA20_POLY1305_IETF);
+  proto.set_cipher_algorithm(
+      password_manager::CIPHER_ALGORITHM_XCHACHA20_POLY1305_IETF);
+  proto.mutable_kdf()->set_algorithm(password_manager::KDF_ALGORITHM_ARGON2ID13);
+  proto.mutable_kdf()->set_ops_limit(descriptor.kdf_ops_limit);
+  proto.mutable_kdf()->set_mem_limit(descriptor.kdf_mem_limit);
+
   std::visit(
       [&proto](const auto &meta_salt, const auto &master_salt,
                const auto &ephemeral_salt) {
@@ -29,8 +49,8 @@ vault::Serializator::serialize(SecureString &&password,
 
   vault::VaultKeys keys;
   try {
-    keys = vault::derive_keys_from_password(
-        std::move(password), vault.meta_salt_, vault.master_salt_);
+    keys = vault::derive_keys_from_password(std::move(password), vault.meta_salt_,
+                                            vault.master_salt_, vault.kdf_);
   } catch (const KDFError &) {
     return std::unexpected(vault::VaultError::OutOfMemory);
   }
@@ -40,6 +60,8 @@ vault::Serializator::serialize(SecureString &&password,
   vault::VaultHeader header =
       vault::make_header(vault.meta_salt_, vault.master_salt_,
                          vault.ephemeral_salt_, vault_nonce);
+
+  const vault::VaultAad aad = vault::make_aad(descriptor, header);
 
   for (const auto &entry : vault.Entries()) {
     auto *e = entries.add_entries();
@@ -76,8 +98,8 @@ vault::Serializator::serialize(SecureString &&password,
 
   try {
     encrypted = CryptoService::encrypt(serialized.data(), serialized.size(),
-                                       header.data(), header.size(),
-                                       vault_nonce, keys.meta_key);
+                                       aad.data(), aad.size(), vault_nonce,
+                                       keys.meta_key);
   } catch (const CryptoError &) {
     return std::unexpected(VaultError::CryptoError);
   }
@@ -145,6 +167,48 @@ vault::Serializator::deserialize(SecureString &&password,
       proto.ephemeral_salt().size() != crypto_pwhash_SALTBYTES)
     return std::unexpected(vault::VaultError::VaultCorrupted);
 
+  // Version gate first: anything newer than this build understands is rejected
+  // before touching crypto. Absent version == legacy v0.
+  const std::uint32_t version = proto.version();
+
+  if (version > vault::kVaultFormatVersion)
+    return std::unexpected(vault::VaultError::InvalidFormat);
+
+  // v0 files were always written with the current KDF profile and authenticate
+  // only the salt/nonce header. v1 files declare their profile and algorithm
+  // identifiers, which are validated against the supported whitelist.
+  KdfProfile kdf = kCurrentKdfProfile;
+  vault::VaultDescriptor descriptor{};
+
+  if (version != 0) {
+    if (proto.kdf().algorithm() != password_manager::KDF_ALGORITHM_ARGON2ID13 ||
+        proto.salt_algorithm() != password_manager::SALT_ALGORITHM_ARGON2 ||
+        proto.nonce_algorithm() !=
+            password_manager::NONCE_ALGORITHM_XCHACHA20_POLY1305_IETF ||
+        proto.cipher_algorithm() !=
+            password_manager::CIPHER_ALGORITHM_XCHACHA20_POLY1305_IETF)
+      return std::unexpected(vault::VaultError::InvalidFormat);
+
+    kdf = KdfProfile{static_cast<std::size_t>(proto.kdf().ops_limit()),
+                     static_cast<std::size_t>(proto.kdf().mem_limit()),
+                     kPwhashAlgorithm};
+
+    if (!is_supported_kdf_profile(kdf))
+      return std::unexpected(vault::VaultError::InvalidFormat);
+
+    descriptor.version = version;
+    descriptor.kdf_algorithm =
+        static_cast<std::uint32_t>(proto.kdf().algorithm());
+    descriptor.kdf_ops_limit = proto.kdf().ops_limit();
+    descriptor.kdf_mem_limit = proto.kdf().mem_limit();
+    descriptor.salt_algorithm =
+        static_cast<std::uint32_t>(proto.salt_algorithm());
+    descriptor.nonce_algorithm =
+        static_cast<std::uint32_t>(proto.nonce_algorithm());
+    descriptor.cipher_algorithm =
+        static_cast<std::uint32_t>(proto.cipher_algorithm());
+  }
+
   Nonce nonce;
 
   Salt master_salt, meta_salt, ephemeral_salt;
@@ -165,7 +229,7 @@ vault::Serializator::deserialize(SecureString &&password,
   vault::VaultKeys keys;
   try {
     keys = vault::derive_keys_from_password(std::move(password), meta_salt,
-                                            master_salt);
+                                            master_salt, kdf);
   } catch (const KDFError &) {
     return std::unexpected(vault::VaultError::OutOfMemory);
   }
@@ -181,9 +245,17 @@ vault::Serializator::deserialize(SecureString &&password,
   std::string decrypted;
 
   try {
-    decrypted = CryptoService::decrypt(encrypted_entries.data(),
-                                       encrypted_entries.size(), header.data(),
-                                       header.size(), nonce, keys.meta_key);
+    if (version == 0) {
+      decrypted = CryptoService::decrypt(encrypted_entries.data(),
+                                         encrypted_entries.size(),
+                                         header.data(), header.size(), nonce,
+                                         keys.meta_key);
+    } else {
+      const vault::VaultAad aad = vault::make_aad(descriptor, header);
+      decrypted = CryptoService::decrypt(encrypted_entries.data(),
+                                         encrypted_entries.size(), aad.data(),
+                                         aad.size(), nonce, keys.meta_key);
+    }
   } catch (const CryptoError &) {
     return std::unexpected(VaultError::CryptoError);
   }
@@ -198,7 +270,7 @@ vault::Serializator::deserialize(SecureString &&password,
     return std::unexpected(vault::VaultError::VaultCorrupted);
 
   EphemeralKey new_session_key(std::move(password),
-                               get<Argon2Salt>(ephemeral_salt));
+                               get<Argon2Salt>(ephemeral_salt), kdf);
 
   EncryptedField new_magic_ciphertext =
       EncryptedField::encrypt(vault.test_magic_plaintext, new_session_key);
@@ -255,6 +327,7 @@ vault::Serializator::deserialize(SecureString &&password,
   vault.meta_salt_ = meta_salt;
   vault.master_salt_ = master_salt;
   vault.ephemeral_salt_ = ephemeral_salt;
+  vault.kdf_ = kdf;
   vault.test_magic_ciphertext = std::move(new_magic_ciphertext);
   vault.entries_ = std::move(temp_entries);
 

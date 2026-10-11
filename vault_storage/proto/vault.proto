@@ -15,10 +15,46 @@ message EncryptedEntries {
   repeated PasswordEntryProto entries = 1;
 }
 
+// KDF algorithm identifiers
+enum KdfAlgorithm {
+  KDF_ALGORITHM_UNSPECIFIED = 0;
+  KDF_ALGORITHM_ARGON2ID13 = 1;
+}
+
+// Symmetric cipher identifiers
+enum CipherAlgorithm {
+  CIPHER_ALGORITHM_UNSPECIFIED = 0;
+  CIPHER_ALGORITHM_XCHACHA20_POLY1305_IETF = 1;
+}
+
+// Salt type identifiers
+enum SaltAlgorithm {
+  SALT_ALGORITHM_UNSPECIFIED = 0;
+  SALT_ALGORITHM_ARGON2 = 1;
+}
+
+// Nonce type identifiers
+enum NonceAlgorithm {
+  NONCE_ALGORITHM_UNSPECIFIED = 0;
+  NONCE_ALGORITHM_XCHACHA20_POLY1305_IETF = 1;
+}
+
+// KDF parameters used for deriving keys from the master password
+message KdfParams {
+  KdfAlgorithm algorithm = 1;
+  uint64 ops_limit = 2; // Argon2 opslimit
+  uint64 mem_limit = 3; // Argon2 memlimit (bytes)
+}
+
 message VaultProto {
   bytes nonce = 1;
   bytes master_salt = 2;
   bytes meta_salt = 3;
   bytes entries = 4;
   bytes ephemeral_salt = 5;
+  uint32 version = 6;              // Vault format version. 0 = legacy (no version field)
+  KdfParams kdf = 7;               // KDF parameters used to derive keys
+  SaltAlgorithm salt_algorithm = 8;
+  NonceAlgorithm nonce_algorithm = 9;
+  CipherAlgorithm cipher_algorithm = 10;
 }

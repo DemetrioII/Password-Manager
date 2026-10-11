@@ -259,4 +259,59 @@ TEST_F(VaultModelTest, DifferentMasterSaltsProduceDifferentMasterKeys) {
   EXPECT_NE(keys1.master_key, keys2.master_key);
 }
 
+TEST_F(VaultModelTest, MakeAadIsDeterministic) {
+  const vault::VaultDescriptor descriptor{};
+  vault::VaultHeader header{};
+
+  std::ranges::fill(header, std::byte{0x42});
+
+  EXPECT_EQ(vault::make_aad(descriptor, header),
+            vault::make_aad(descriptor, header));
+}
+
+TEST_F(VaultModelTest, MakeAadEndsWithHeader) {
+  const vault::VaultDescriptor descriptor{};
+  vault::VaultHeader header{};
+
+  std::ranges::fill(header, std::byte{0x42});
+
+  const vault::VaultAad aad = vault::make_aad(descriptor, header);
+
+  ASSERT_EQ(aad.size(), vault::kDescriptorBytes + header.size());
+
+  EXPECT_TRUE(std::ranges::equal(
+      header, std::ranges::subrange(aad.begin() + vault::kDescriptorBytes,
+                                    aad.end())));
+}
+
+TEST_F(VaultModelTest, MakeAadChangesWhenVersionChanges) {
+  vault::VaultDescriptor first{};
+  vault::VaultDescriptor second{};
+  second.version = first.version + 1;
+
+  vault::VaultHeader header{};
+
+  EXPECT_NE(vault::make_aad(first, header), vault::make_aad(second, header));
+}
+
+TEST_F(VaultModelTest, MakeAadChangesWhenKdfParamsChange) {
+  vault::VaultDescriptor first{};
+  vault::VaultDescriptor second{};
+  second.kdf_ops_limit = first.kdf_ops_limit + 1;
+
+  vault::VaultHeader header{};
+
+  EXPECT_NE(vault::make_aad(first, header), vault::make_aad(second, header));
+}
+
+TEST_F(VaultModelTest, MakeAadChangesWhenAlgorithmIdsChange) {
+  vault::VaultDescriptor first{};
+  vault::VaultDescriptor second{};
+  second.cipher_algorithm = first.cipher_algorithm + 1;
+
+  vault::VaultHeader header{};
+
+  EXPECT_NE(vault::make_aad(first, header), vault::make_aad(second, header));
+}
+
 } // namespace

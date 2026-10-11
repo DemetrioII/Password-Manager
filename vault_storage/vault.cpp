@@ -110,8 +110,8 @@ void vault::Vault::Lock() {
 }
 
 bool vault::Vault::Unlock(SecureString &&password) {
-  auto new_potential_session_key =
-      EphemeralKey(std::move(password), get<Argon2Salt>(ephemeral_salt_));
+  auto new_potential_session_key = EphemeralKey(
+      std::move(password), get<Argon2Salt>(ephemeral_salt_), kdf_);
   try {
     if (test_magic_ciphertext.decrypt(new_potential_session_key) ==
         test_magic_plaintext) {

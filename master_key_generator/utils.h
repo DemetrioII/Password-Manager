@@ -22,6 +22,32 @@ constexpr std::size_t kPwhashOpsLimit = crypto_pwhash_OPSLIMIT_MODERATE;
 constexpr std::size_t kPwhashMemLimit = crypto_pwhash_MEMLIMIT_MODERATE;
 constexpr int kPwhashAlgorithm = crypto_pwhash_ALG_ARGON2ID13;
 
+// The KDF parameters a vault file declares. Vaults persist this so a future
+// parameter bump does not orphan archives written with older parameters.
+struct KdfProfile {
+  std::size_t ops_limit;
+  std::size_t mem_limit;
+  int algorithm;
+
+  friend bool operator==(const KdfProfile &, const KdfProfile &) = default;
+};
+
+constexpr KdfProfile kCurrentKdfProfile{kPwhashOpsLimit, kPwhashMemLimit,
+                                        kPwhashAlgorithm};
+
+// Every KDF profile this build can read. Loading is bounded by this table:
+// a vault file cannot ask us to spend unbounded memory/CPU, and an unknown
+// profile is rejected before any derivation happens.
+constexpr KdfProfile kSupportedKdfProfiles[] = {kCurrentKdfProfile};
+
+inline bool is_supported_kdf_profile(const KdfProfile &profile) {
+  for (const KdfProfile &supported : kSupportedKdfProfiles) {
+    if (profile == supported)
+      return true;
+  }
+  return false;
+}
+
 enum class KeyManagerError {
   FileNotFound,
 };

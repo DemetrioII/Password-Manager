@@ -96,6 +96,52 @@ bool write_crafted_vault(
   return file.good();
 }
 
+// Reads back a vault file into its protobuf representation.
+bool read_vault_proto(const std::filesystem::path &path,
+                      password_manager::VaultProto &proto) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file)
+    return false;
+
+  std::string data((std::istreambuf_iterator<char>(file)),
+                   std::istreambuf_iterator<char>());
+  return proto.ParseFromString(data);
+}
+
+// Overwrites a vault file with `proto`.
+bool write_vault_proto(const std::filesystem::path &path,
+                       const password_manager::VaultProto &proto) {
+  std::string serialized;
+  if (!proto.SerializeToString(&serialized))
+    return false;
+
+  std::ofstream file(path, std::ios::binary | std::ios::trunc);
+  if (!file)
+    return false;
+  file.write(serialized.data(),
+             static_cast<std::streamsize>(serialized.size()));
+  return file.good();
+}
+
+// Serializes `vault` and applies `mutate` to the stored protobuf, simulating an
+// attacker who edits the plaintext header fields of an otherwise valid file.
+bool write_tampered_vault(const std::filesystem::path &path,
+                          vault::Vault &vault,
+                          const std::function<
+                              void(password_manager::VaultProto &)> &mutate) {
+  if (!vault::Serializator::serialize(SecureString{"master-password"},
+                                      path.string(), vault)
+           .has_value())
+    return false;
+
+  password_manager::VaultProto proto;
+  if (!read_vault_proto(path, proto))
+    return false;
+
+  mutate(proto);
+  return write_vault_proto(path, proto);
+}
+
 class VaultSerializerTest : public ::testing::Test {
 protected:
   static void SetUpTestSuite() { ASSERT_EQ(sodium_init(), 0); }
@@ -473,7 +519,8 @@ TEST_F(VaultSerializerTest, CorruptedEncryptedDataIsRejected) {
   ASSERT_FALSE(result.has_value());
 
   EXPECT_TRUE(result.error() == vault::VaultError::VaultCorrupted ||
-              result.error() == vault::VaultError::CryptoError);
+              result.error() == vault::VaultError::CryptoError ||
+              result.error() == vault::VaultError::InvalidFormat);
 }
 
 TEST_F(VaultSerializerTest, ServiceSaveAndLoadRoundTrip) {
@@ -749,6 +796,188 @@ TEST_F(VaultSerializerTest, WriteAtomicLeavesNoTempFiles) {
     EXPECT_EQ(name.find(".tmp."), std::string::npos)
         << "leftover temp file: " << name;
   }
+}
+
+TEST_F(VaultSerializerTest, SerializeWritesVersionOneDescriptor) {
+  vault::Vault vault{SecureString{"hello"}};
+  vault.Init();
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"secret"}));
+
+  ASSERT_TRUE(vault::Serializator::serialize(SecureString{"master-password"},
+                                             path_.string(), vault));
+
+  password_manager::VaultProto proto;
+  ASSERT_TRUE(read_vault_proto(path_, proto));
+
+  EXPECT_EQ(proto.version(), vault::kVaultFormatVersion);
+  EXPECT_EQ(proto.kdf().algorithm(), password_manager::KDF_ALGORITHM_ARGON2ID13);
+  EXPECT_EQ(proto.kdf().ops_limit(), kCurrentKdfProfile.ops_limit);
+  EXPECT_EQ(proto.kdf().mem_limit(), kCurrentKdfProfile.mem_limit);
+  EXPECT_EQ(proto.salt_algorithm(), password_manager::SALT_ALGORITHM_ARGON2);
+  EXPECT_EQ(proto.nonce_algorithm(),
+            password_manager::NONCE_ALGORITHM_XCHACHA20_POLY1305_IETF);
+  EXPECT_EQ(proto.cipher_algorithm(),
+            password_manager::CIPHER_ALGORITHM_XCHACHA20_POLY1305_IETF);
+}
+
+TEST_F(VaultSerializerTest, LegacyVersionlessVaultStillLoads) {
+  // write_crafted_vault does not set a version field, producing a v0 file.
+  ASSERT_TRUE(write_crafted_vault(
+      path_, "master-pw",
+      [](password_manager::EncryptedEntries &entries, const Key &master_key) {
+        add_entry(entries, master_key, "id-0001", "GitHub", "alice", "secret",
+                  "notes");
+      }));
+
+  vault::Vault vault{SecureString{"x"}};
+  vault.Init();
+
+  const auto result = vault::Serializator::deserialize(
+      SecureString{"master-pw"}, path_.string(), vault);
+
+  ASSERT_TRUE(result.has_value());
+  ASSERT_EQ(vault.Entries().size(), 1u);
+  EXPECT_EQ(vault.Entries()[0].title, "GitHub");
+}
+
+TEST_F(VaultSerializerTest, FutureVersionIsRejected) {
+  vault::Vault vault{SecureString{"hello"}};
+  vault.Init();
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"secret"}));
+
+  ASSERT_TRUE(write_tampered_vault(
+      path_, vault, [](password_manager::VaultProto &proto) {
+        proto.set_version(vault::kVaultFormatVersion + 1);
+      }));
+
+  vault::Vault restored{SecureString{"x"}};
+  restored.Init();
+
+  const auto result = vault::Serializator::deserialize(
+      SecureString{"master-password"}, path_.string(), restored);
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), vault::VaultError::InvalidFormat);
+}
+
+TEST_F(VaultSerializerTest, VersionDowngradeIsDetected) {
+  vault::Vault vault{SecureString{"hello"}};
+  vault.Init();
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"secret"}));
+
+  // Strip the version so a v1 file masquerades as legacy v0. The AAD no longer
+  // matches the descriptor the file was sealed with, so authentication fails.
+  ASSERT_TRUE(write_tampered_vault(
+      path_, vault, [](password_manager::VaultProto &proto) {
+        proto.clear_version();
+      }));
+
+  vault::Vault restored{SecureString{"x"}};
+  restored.Init();
+
+  const auto result = vault::Serializator::deserialize(
+      SecureString{"master-password"}, path_.string(), restored);
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), vault::VaultError::CryptoError);
+}
+
+TEST_F(VaultSerializerTest, TamperedKdfParamsAreRejected) {
+  vault::Vault vault{SecureString{"hello"}};
+  vault.Init();
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"secret"}));
+
+  ASSERT_TRUE(write_tampered_vault(
+      path_, vault, [](password_manager::VaultProto &proto) {
+        proto.mutable_kdf()->set_ops_limit(12345);
+      }));
+
+  vault::Vault restored{SecureString{"x"}};
+  restored.Init();
+
+  const auto result = vault::Serializator::deserialize(
+      SecureString{"master-password"}, path_.string(), restored);
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), vault::VaultError::InvalidFormat);
+}
+
+TEST_F(VaultSerializerTest, TamperedAlgorithmIdsAreRejected) {
+  for (int field = 0; field < 3; ++field) {
+    vault::Vault vault{SecureString{"hello"}};
+    vault.Init();
+    ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"secret"}));
+
+    ASSERT_TRUE(write_tampered_vault(
+        path_, vault, [field](password_manager::VaultProto &proto) {
+          switch (field) {
+          case 0:
+            proto.set_salt_algorithm(
+                password_manager::SALT_ALGORITHM_UNSPECIFIED);
+            break;
+          case 1:
+            proto.set_nonce_algorithm(
+                password_manager::NONCE_ALGORITHM_UNSPECIFIED);
+            break;
+          default:
+            proto.set_cipher_algorithm(
+                password_manager::CIPHER_ALGORITHM_UNSPECIFIED);
+            break;
+          }
+        }));
+
+    vault::Vault restored{SecureString{"x"}};
+    restored.Init();
+
+    const auto result = vault::Serializator::deserialize(
+        SecureString{"master-password"}, path_.string(), restored);
+
+    ASSERT_FALSE(result.has_value()) << "field index " << field;
+    EXPECT_EQ(result.error(), vault::VaultError::InvalidFormat);
+  }
+}
+
+TEST_F(VaultSerializerTest, TamperedKdfAlgorithmIsRejected) {
+  vault::Vault vault{SecureString{"hello"}};
+  vault.Init();
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"secret"}));
+
+  ASSERT_TRUE(write_tampered_vault(
+      path_, vault, [](password_manager::VaultProto &proto) {
+        proto.mutable_kdf()->set_algorithm(
+            password_manager::KDF_ALGORITHM_UNSPECIFIED);
+      }));
+
+  vault::Vault restored{SecureString{"x"}};
+  restored.Init();
+
+  const auto result = vault::Serializator::deserialize(
+      SecureString{"master-password"}, path_.string(), restored);
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), vault::VaultError::InvalidFormat);
+}
+
+TEST_F(VaultSerializerTest, TamperedVaultNonceIsDetected) {
+  vault::Vault vault{SecureString{"hello"}};
+  vault.Init();
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"secret"}));
+
+  ASSERT_TRUE(write_tampered_vault(
+      path_, vault, [](password_manager::VaultProto &proto) {
+        std::string nonce = proto.nonce();
+        nonce[0] ^= 0x01;
+        proto.set_nonce(nonce);
+      }));
+
+  vault::Vault restored{SecureString{"x"}};
+  restored.Init();
+
+  const auto result = vault::Serializator::deserialize(
+      SecureString{"master-password"}, path_.string(), restored);
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), vault::VaultError::CryptoError);
 }
 
 } // namespace

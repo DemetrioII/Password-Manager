@@ -47,6 +47,7 @@ private:
   Salt master_salt_;
   Salt ephemeral_salt_;
   EphemeralKey session_key_;
+  KdfProfile kdf_ = kCurrentKdfProfile;
   bool locked_ = false;
   UnlockThrottle throttle_;
 

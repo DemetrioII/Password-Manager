@@ -2,13 +2,20 @@
 #include "vault_storage/vault.h"
 #include "vault_storage/vault_serializer.h"
 #include <QApplication>
+#include <QClipboard>
+#include <QEnterEvent>
+#include <QFrame>
+#include <QGraphicsDropShadowEffect>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMainWindow>
+#include <QPropertyAnimation>
+#include <QTimer>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QtWidgets>
 
-class PasswordItemWidget : public QWidget {
+class PasswordItemWidget : public QFrame {
   Q_OBJECT
 public:
   explicit PasswordItemWidget(const vault::PasswordEntry &entry,
@@ -17,14 +24,22 @@ public:
 
   vault::UUID get_id() const;
 
-  ~PasswordItemWidget() override {}
+  ~PasswordItemWidget() override = default;
+
+protected:
+  void enterEvent(QEnterEvent *event) override;
+  void leaveEvent(QEvent *event) override;
 
 private:
   QLabel *titleLabel_;
   QLabel *loginLabel_;
   QLineEdit *passwordEdit_;
   QToolButton *showButton_;
+  QToolButton *copyButton_;
+  const vault::Vault *vault_;
   vault::UUID id_;
+  QGraphicsDropShadowEffect *shadowEffect_;
+  QPropertyAnimation *hoverAnimation_;
 };
 
 class MainWindow : public QMainWindow {
@@ -34,6 +49,7 @@ public:
   ~MainWindow() override;
 
   void refreshPasswordList();
+  void filterPasswordList(const QString &needle);
 
   bool isLocked() const;
 

@@ -2,23 +2,38 @@
 
 A password manager written in **modern C++** with a strong focus on security, cryptography and low-level software design.
 
+![C++23](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=c%2B%2B&logoColor=white)
+![Bazel](https://img.shields.io/badge/build-Bazel%20%2B%20Bzlmod-43A047?logo=bazel&logoColor=white)
+![Qt 6](https://img.shields.io/badge/UI-Qt%206-41CD52?logo=qt&logoColor=white)
+![libsodium](https://img.shields.io/badge/crypto-libsodium-9C27B0)
+![Platform](https://img.shields.io/badge/platform-Linux-37474F?logo=linux&logoColor=white)
+![Status](https://img.shields.io/badge/status-work%20in%20progress-orange)
+
 > ⚠️ **Work in progress**
 >
 > This project is under active development and has **not been independently audited**. Do not use it as the only storage for real passwords or other critical secrets.
 
 ## ✨ Features
 
-* 🔒 Encrypted password vault
-* 🧂 Separate cryptographic salts for different purposes
-* 🔑 Master-key derivation using **Argon2id**
-* 🔐 **XChaCha20-Poly1305** authenticated encryption
-* 🎲 Cryptographically secure random nonces
-* 🗃️ Binary vault serialization using **Protocol Buffers**
-* 🧹 Sensitive data handling and explicit vault locking
-* 🛡️ Atomic file writes
-* 🚦 Error handling with `std::expected`
-* 🖥️ Qt-based graphical interface
-* 🏗️ Bazel build system with Bzlmod
+* 🔒 **Encrypted password vault** with an explicit lock / unlock workflow
+* 🏷️ **Versioned on-disk format (v1)** — vault files carry their version, KDF parameters and algorithm identifiers, and legacy files are still readable
+* 🧂 **Three independent salts** (metadata, master key, session) and three separate keys
+* 🔑 Master-key derivation using **Argon2id**, with the declared profile validated against an allow-list *before* any derivation
+* 🔐 **XChaCha20-Poly1305** authenticated encryption (both per-entry and vault level)
+* 🎲 Cryptographically secure random nonces, freshly generated per operation
+* 🧬 **AAD** binds the version, KDF parameters and algorithm ids to the vault ciphertext, so tampering and version downgrades are detected
+* ♻️ **Rekeying** — change the master password and re-encrypt every entry (`Vault::SetPassword`)
+* ✏️ **Entry mutation** — update an entry while preserving its UUID, and set notes
+* 📏 **Consistent size limits** between writing and reading, so a saved vault is always re-loadable
+* 🧹 **Secure memory handling** — `mlock`, guard pages, read-only-at-rest secrets, `sodium_memzero` wipes
+* 🛡️ **Process hardening** — core dumps disabled, process made non-dumpable, whole address space locked into RAM
+* 🚦 **Non-throwing public API** — recoverable errors use `std::expected` and `VaultError`, never exceptions
+* ⏱️ **Unlock throttling** — exponential backoff on failed unlock attempts
+* 🧱 **Atomic file writes** (`mkstemp` → `fsync` → `rename` → directory `fsync`), owner-only permissions
+* 🔑 Built-in **password generator** with a configurable policy
+* 🖥️ **Qt 6** graphical interface with a real startup flow and a dark theme
+* 🧪 Comprehensive **GoogleTest** suite, including offscreen Qt form tests
+* 🏗️ **Bazel + Bzlmod** build system with dedicated hardening configs
 * 📦 Modular C++ architecture
 
 ## 🏛️ Architecture
@@ -27,28 +42,33 @@ The project is divided into several relatively independent components:
 
 ```text
                     ┌─────────────────────┐
-                    │      Qt UI          │
-                    │                     │
-                    │  Password Manager   │
+                    │       Qt UI         │
+                    │  Start / Unlock /   │
+                    │  Main window        │
                     └──────────┬──────────┘
                                │
                                ▼
-                    ┌─────────────────────┐
-                    │    Vault Storage    │
-                    │                     │
-                    │  Lock / Unlock      │
-                    │  Entries            │
-                    │  Serialization      │
-                    └───────┬─────┬───────┘
-                            │     │
-                ┌───────────┘     └────────────┐
-                ▼                              ▼
-      ┌──────────────────┐          ┌──────────────────┐
-      │  Crypto Service  │          │ Master Key / KDF │
-      │                  │          │                  │
-      │ XChaCha20-       │          │ Argon2id         │
-      │ Poly1305          │          │                  │
-      └──────────────────┘          └──────────────────┘
+                    ┌─────────────────────┐        ┌────────────────────┐
+                    │    Vault Storage    │◄───────│ Password Generator │
+                    │  Lock / Unlock      │        └────────────────────┘
+                    │  Entries / Rekey    │
+                    │  Serialization v1   │
+                    │  Atomic writes      │
+                    └───┬─────────┬───────┘
+                        │         │
+            ┌───────────┘         └────────────┐
+            ▼                                  ▼
+  ┌──────────────────┐               ┌──────────────────────┐
+  │  Crypto Service  │               │  Master Key / KDF    │
+  │                  │               │                      │
+  │  XChaCha20-      │               │  Argon2id            │
+  │  Poly1305        │               │  Key / SecureString  │
+  └──────────────────┘               └──────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────┐
+  │  Process Hardening  ·  applied before anything else       │
+  │  RLIMIT_CORE=0 · PR_SET_DUMPABLE=0 · mlockall             │
+  └──────────────────────────────────────────────────────────┘
 ```
 
 ### Vault
@@ -57,37 +77,43 @@ The `Vault` is the main abstraction responsible for managing password entries.
 
 It supports operations such as:
 
-* adding entries;
+* adding entries (with size validation);
 * removing entries;
-* finding entries;
+* finding and listing entries;
+* updating an entry while keeping its UUID;
+* setting notes;
+* changing the master password and re-encrypting everything (**rekey**);
 * locking the vault;
 * unlocking the vault.
 
-Operations which require access to decrypted data are rejected while the vault is locked.
+Operations which require access to decrypted data are rejected while the vault is locked. `Lock()` wipes the entry metadata from memory; unlocking can restore it from the backing file.
 
 ### Key derivation
 
 The master password is **not used directly as an encryption key**.
 
-Instead, Argon2id is used to derive cryptographic keys from the master password.
-
-Two independent salts are used:
+Instead, Argon2id derives independent keys from the master password, each with its own salt:
 
 ```text
-                 Master Password
-                        │
-              ┌─────────┴─────────┐
-              │                   │
-          meta salt           master salt
-              │                   │
-              ▼                   ▼
-           Argon2id             Argon2id
-              │                   │
-              ▼                   ▼
-          meta key            master key
+                          Master Password
+                                 │
+        ┌────────────────────────┼────────────────────────┐
+        │                        │                        │
+    meta salt              master salt             ephemeral salt
+        │                        │                        │
+        ▼                        ▼                        ▼
+     Argon2id               Argon2id                  Argon2id
+        │                        │                        │
+        ▼                        ▼                        ▼
+     meta key               master key              session key
+   (vault blob)         (entry passwords)          (in memory)
 ```
 
-The separation of keys allows different cryptographic purposes to use independent key material.
+* the **meta key** encrypts the whole serialized entry set on disk;
+* the **master key** encrypts individual password fields on disk;
+* the **session key** protects decrypted passwords while they live in memory.
+
+The separation of keys lets different cryptographic purposes use independent key material.
 
 ### Vault encryption
 
@@ -96,29 +122,22 @@ Password entries are encrypted individually before the complete serialized entry
 Conceptually:
 
 ```text
-Password Entry
+Password Entry (in memory, under session key)
       │
       ▼
-Serialize fields
+Re-encrypt password under master key ──► per-entry nonce
       │
       ▼
-Encrypt password ──────► per-entry nonce
+Serialize entries with Protocol Buffers
       │
       ▼
-Protocol Buffers
+Encrypt serialized entries under meta key ──► vault nonce
       │
       ▼
-Encrypt serialized entries
-      │
-      └───────────────► vault nonce
-      │
-      ▼
-Encrypted vault file
+Encrypted vault file (v1)
 ```
 
-The vault-level encryption uses **XChaCha20-Poly1305**, while individual passwords are encrypted separately.
-
-Nonces are generated independently for encryption operations.
+The vault-level encryption uses **XChaCha20-Poly1305** with the version/KDF/algorithm descriptor bound as **AAD**; individual passwords are encrypted separately under the master key. Nonces are generated independently for every encryption operation.
 
 ## 🔐 Cryptography
 
@@ -126,15 +145,17 @@ The project currently relies on [libsodium](https://doc.libsodium.org/) rather t
 
 Current cryptographic building blocks include:
 
-| Purpose                       | Primitive          |
-| ----------------------------- | ------------------ |
-| Password-based key derivation | Argon2id           |
-| Vault encryption              | XChaCha20-Poly1305 |
-| Random data                   | libsodium CSPRNG   |
-| Per-entry nonces              | Randomly generated |
-| Serialization                 | Protocol Buffers   |
+| Purpose                        | Primitive                    |
+| ------------------------------ | ---------------------------- |
+| Password-based key derivation  | Argon2id (`crypto_pwhash`)   |
+| Key separation                 | `crypto_kdf_derive_from_key` |
+| Entry & vault encryption       | XChaCha20-Poly1305 (IETF)    |
+| Random data                    | libsodium CSPRNG             |
+| Secret comparison              | constant-time `sodium_memcmp`|
+| Per-entry / vault nonces       | Randomly generated           |
+| Serialization                  | Protocol Buffers             |
 
-The current implementation derives both a **metadata key** and a **master key** from the same master password using independent salts.
+The current implementation derives a **metadata key** and a **master key** from the master password using independent salts, plus an **ephemeral session key** for in-memory protection.
 
 ### Why libsodium?
 
@@ -142,61 +163,85 @@ The project deliberately avoids implementing cryptographic primitives from scrat
 
 Cryptography is an area where "I can implement AES" is very different from "I can implement AES securely". Using a well-established cryptographic library greatly reduces the amount of security-critical code that has to be written and maintained.
 
-## 📦 Data format
+## 📦 Data format (v1)
 
-The vault is serialized using **Protocol Buffers**.
+The vault is serialized using **Protocol Buffers** and written as a **versioned v1** descriptor.
 
 The encrypted file contains the information necessary to derive the keys and decrypt the vault, including:
 
-* metadata salt;
-* master-key salt;
-* vault nonce;
-* encrypted entries.
+* the format **version** and the declared **KDF parameters** (algorithm, ops limit, memory limit);
+* the **salt algorithm**, **nonce algorithm** and **cipher algorithm** identifiers;
+* the metadata salt, master-key salt and ephemeral salt;
+* the vault nonce;
+* the encrypted entries.
 
-The actual password contents remain encrypted.
+The actual password contents remain encrypted. Binary cryptographic material is represented as `bytes` rather than text.
 
-Binary cryptographic material is represented as `bytes` rather than text.
+### AAD binding
+
+Version, KDF parameters and algorithm ids are packed together with the salts and nonce into a canonical **little-endian AAD** (a fixed byte layout — an on-disk contract). Any change to it, or a version downgrade, is detected as a `CryptoError`.
+
+### Compatibility
+
+* Declared KDF parameters are validated against a **supported-profile allow-list** before derivation, so a malicious file cannot force unbounded memory or CPU usage.
+* Files without a version field are treated as **legacy v0**, read with the old header-only AAD.
+* Unknown or unsupported algorithms / KDF parameters and future versions are rejected as `InvalidFormat`.
+
+## 🛡️ Hardening
+
+Security is treated as a whole-system property, not just a crypto problem:
+
+* 🔒 **Secure memory** — `Key` and `SecureString` types are non-copyable, locked with `mlock`, and wiped with `sodium_memzero`; `SecureString` sits on guard pages and is read-only at rest.
+* 🚫 **Process hardening** — applied first thing at startup: `RLIMIT_CORE = 0`, `PR_SET_DUMPABLE = 0`, `mlockall(MCL_CURRENT | MCL_FUTURE)`, all fail-closed.
+* ⏱️ **Unlock throttling** — exponential backoff (capped) on repeated failures, with no success-leaking fast path.
+* 🧾 **Atomic writes** — temp file created with `mkstemp` (owner-only), fully written, `fsync`-ed, then atomically renamed, followed by a directory `fsync`.
+* 🧯 **Defensive parsing** — field sizes, salt/nonce sizes, entry count and total file size are validated before use; unsupported inputs are rejected early.
+* 🏗️ **Build hardening** — stack protector, control-flow protection, stack-clash protection, and full RELRO / non-exec stack link flags; `--config=strict` (warnings-as-errors on first-party packages) and `--config=release` (`_FORTIFY_SOURCE=2`, `NDEBUG`); optional `--config=asan` / `--config=ubsan`.
 
 ## 🧱 Project structure
 
 ```text
 .
-├── UI/
-│   ├── UI.cpp
-│   ├── UI.hpp
-│   ├── main.cpp
-│   ├── BUILD
-│   └── dark.qss
+├── UI/                     # Qt 6 application (real entrypoint: //UI:UI)
+│   ├── UI.cpp / UI.hpp     # Main window, entry widgets, clipboard hygiene
+│   ├── main.cpp            # Startup flow: StartForm → MasterForm → window
+│   ├── forms/              # Start / Master / Lock / Password / Save / Load forms
+│   ├── tests/              # Offscreen Qt form tests
+│   ├── dark.qss            # Dark theme
+│   └── BUILD
 │
-├── crypto_service/
-│   └── ...
+├── crypto_service/         # XChaCha20-Poly1305 wrappers over libsodium
 │
-├── master_key_generator/
-│   └── ...
+├── master_key_generator/   # Argon2id KDF, Key / SecureString / EphemeralKey,
+│                           # EncryptedField, salts & nonce managers
 │
-├── vault_storage/
-│   └── ...
+├── vault_storage/          # Vault, serialization (v1), model & AAD,
+│   ├── proto/              #   atomic safe writer, unlock throttle
+│   │   └── vault.proto     # Vault protobuf schema
+│   └── tests/              # Vault / serializer / model / throttle tests
 │
-├── main.cpp
+├── password_generator/     # Policy-based password generator
+│
+├── process_hardening/      # Linux process hardening helpers
+│
+├── main.cpp                # //:app — currently a stub
 ├── BUILD
-├── MODULE.bazel
+├── MODULE.bazel            # Bzlmod dependency graph
 └── README.md
 ```
 
-The repository currently separates the UI, cryptographic service, key generation and vault storage into independent Bazel targets.
+The repository separates the UI, cryptographic service, key generation, vault storage, password generation and process hardening into independent Bazel targets.
 
 ## 🛠️ Tech Stack
 
-* **C++23**
-* **Bazel**
-* **Bzlmod**
-* **Qt**
-* **libsodium**
+* **C++23** (set per-target via `copts`)
+* **Bazel** + **Bzlmod** (no CMake / Makefile; `WORKSPACE` mode is disabled)
+* **Qt 6** (via `rules_qt`, local SDK)
+* **libsodium** (system library)
 * **Protocol Buffers**
 * **GoogleTest**
-* **nlohmann/json**
 
-The dependency graph is managed through `MODULE.bazel`. The project currently uses C++23 and includes dependencies for libsodium, protobuf, Qt and GoogleTest.
+The dependency graph is managed through `MODULE.bazel`. The project currently uses C++23 and includes dependencies for protobuf, Qt and GoogleTest; libsodium is consumed as a system library.
 
 ## 🚀 Building
 
@@ -206,7 +251,8 @@ You will need:
 
 * a C++23-compatible compiler;
 * [Bazel](https://bazel.build/) or [Bazelisk](https://github.com/bazelbuild/bazelisk);
-* Qt 6;
+* Qt 6 with development headers;
+* libsodium (`-lsodium`);
 * the dependencies declared in `MODULE.bazel`.
 
 Clone the repository:
@@ -216,61 +262,92 @@ git clone https://github.com/DemetrioII/Password-Manager.git
 cd Password-Manager
 ```
 
-Build the core application:
+Build everything:
 
 ```bash
-bazelisk build //:app
+bazelisk build //...
 ```
 
-Build the graphical interface:
+Build the graphical application (the real entrypoint):
 
 ```bash
 bazelisk build //UI:UI
 ```
 
-Run the application:
+Build with the hardening profiles:
 
 ```bash
-bazelisk run //:app
+bazelisk build --config=strict //...        # -Wall -Wextra -Werror -Wshadow on first-party code
+bazelisk build --config=release -c opt //... # _FORTIFY_SOURCE=2, NDEBUG
+bazelisk build --config=asan //...           # AddressSanitizer
+bazelisk build --config=ubsan //...          # UndefinedBehaviorSanitizer
 ```
 
-Or run the Qt interface:
+Run the application:
 
 ```bash
 bazelisk run //UI:UI
 ```
 
+> ℹ️ `//:app` (the root `main.cpp`) is currently a stub. The real program is the Qt application `//UI:UI`.
+>
 > Build targets and platform-specific Qt configuration may change while the project is under development.
 
 ## 🧪 Testing
 
-Tests are being developed alongside the core components.
-
-The project uses **GoogleTest** for unit testing.
+The project uses **GoogleTest** for unit testing. There is one `cc_test` target per test file, plus a set of offscreen Qt form tests.
 
 ```bash
 bazelisk test //...
+```
+
+This runs the headless C++ library tests and the Qt form tests. The latter run under `QT_QPA_PLATFORM=offscreen` (no display or `xvfb` required).
+
+To run a single target:
+
+```bash
+bazelisk test //vault_storage/tests:vault_test
 ```
 
 ## 🗺️ Roadmap
 
 The project is still evolving. Planned areas include:
 
-* [ ] Complete vault locking/unlocking workflow
-* [ ] Improve secure memory handling
-* [ ] Password generator
-* [ ] Password search and filtering
-* [ ] Better vault integrity checks
-* [ ] More comprehensive unit tests
-* [ ] Cryptographic test vectors
-* [ ] Crash/recovery handling
-* [ ] Improved Qt interface
+**Done**
+
+* [x] Vault format **v1** — versioned files, KDF parameters, algorithm ids, descriptor-bound AAD, legacy v0 migration
+* [x] Separate salts and keys for metadata, master key and session
+* [x] Secure memory handling (`mlock`, guard pages, wipes)
+* [x] Process hardening (non-dumpable, `mlockall`, no core dumps)
+* [x] Unlock throttling with exponential backoff
+* [x] Rekeying and entry mutation (`SetPassword`, `Update`, `SetNotes`)
+* [x] Consistent write/read size limits
+* [x] Password generator
+* [x] Qt startup flow, real unlock dialog, clipboard hygiene
+* [x] Atomic, owner-only file writes
+
+**Next**
+
+* [ ] Auto-lock on idle / suspend
+* [ ] UI for rekeying and editing notes
+* [ ] Non-blocking unlock (Argon2 currently blocks the event loop)
+* [ ] `.bak` backup and self-check on load
+* [ ] Document Argon2 parameters vs. the OWASP floor + a benchmark target
+
+**Stretch**
+
+* [ ] CI (GitHub Actions with Bazel + ASan/UBSan)
+* [ ] libFuzzer target on deserialization
+* [ ] `clang-format` / `.clang-tidy`
+* [ ] Threat-model document with explicit non-goals
 * [ ] Vault import/export
+* [ ] Vault timestamps
+* [ ] TOTP / 2FA per entry
 * [ ] Secure vault transfer between devices
 * [ ] One-time sharing links
 * [ ] QR-based vault transfer
 * [ ] Network transport with TLS
-* [ ] Security review / external audit
+* [ ] External security audit
 
 ## ⚠️ Security Notice
 
@@ -309,4 +386,3 @@ License information will be added as the project matures.
 ---
 
 **Password Manager** — a small project about building a real password vault from the ground up in modern C++.
-

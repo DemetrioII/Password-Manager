@@ -5,7 +5,9 @@
 std::expected<void, vault::VaultError>
 vault::Serializator::serialize(SecureString &&password,
                                const std::string &file_path,
-                               const vault::Vault &vault) {
+                               vault::Vault &vault) {
+  if (vault.init_error_)
+    return std::unexpected(*vault.init_error_);
   if (vault.locked())
     return std::unexpected(vault::VaultError::VaultLocked);
 
@@ -74,7 +76,7 @@ vault::Serializator::serialize(SecureString &&password,
 
     try {
       auto ciphertext = CryptoService::cypher(
-          entry.password.decrypt(vault.session_key_), nonce, keys.master_key);
+          entry.password.decrypt(*vault.session_key_), nonce, keys.master_key);
       e->set_password(reinterpret_cast<const char *>(ciphertext.data()),
                       ciphertext.size());
     } catch (const CryptoError &) {
@@ -122,10 +124,17 @@ vault::Serializator::serialize(SecureString &&password,
   std::vector<unsigned char> file_data(final_serialized.begin(),
                                        final_serialized.end());
 
+  if (!vault::vault_file_within_limit(file_data.size()))
+    return std::unexpected(vault::VaultError::VaultCorrupted);
+
   auto result = SafeFileWriter::WriteAtomic(file_path, file_data);
 
   if (!result)
     return std::unexpected(vault::VaultError::IoError);
+
+  // Remember where this vault lives so a later lock/reload can restore the
+  // metadata wiped by Lock().
+  vault.path_ = file_path;
 
   return {};
 }
@@ -269,11 +278,16 @@ vault::Serializator::deserialize(SecureString &&password,
   if (entries.entries_size() > MAX_ENTRIES)
     return std::unexpected(vault::VaultError::VaultCorrupted);
 
-  EphemeralKey new_session_key(std::move(password),
-                               get<Argon2Salt>(ephemeral_salt), kdf);
+  std::optional<EphemeralKey> new_session_key;
+  try {
+    new_session_key.emplace(std::move(password),
+                            get<Argon2Salt>(ephemeral_salt), kdf);
+  } catch (const std::exception &) {
+    return std::unexpected(vault::VaultError::OutOfMemory);
+  }
 
   EncryptedField new_magic_ciphertext =
-      EncryptedField::encrypt(vault.test_magic_plaintext, new_session_key);
+      EncryptedField::encrypt(vault.test_magic_plaintext, *new_session_key);
 
   // 🛡️ Temporary buffer for transactionality: the vault is only mutated after
   // every entry has been validated, so a failed load cannot leave it in a
@@ -315,7 +329,7 @@ vault::Serializator::deserialize(SecureString &&password,
       SecureString plaintext = CryptoService::decypher(
           SecureString{e.password()}, password_nonce, keys.master_key);
 
-      entry.password = EncryptedField::encrypt(plaintext, new_session_key);
+      entry.password = EncryptedField::encrypt(plaintext, *new_session_key);
     } catch (const CryptoError &) {
       return std::unexpected(vault::VaultError::CryptoError);
     }
@@ -323,13 +337,16 @@ vault::Serializator::deserialize(SecureString &&password,
     temp_entries.push_back(std::move(entry));
   }
 
-  vault.session_key_ = std::move(new_session_key);
+  vault.session_key_ = std::move(*new_session_key);
   vault.meta_salt_ = meta_salt;
   vault.master_salt_ = master_salt;
   vault.ephemeral_salt_ = ephemeral_salt;
   vault.kdf_ = kdf;
   vault.test_magic_ciphertext = std::move(new_magic_ciphertext);
   vault.entries_ = std::move(temp_entries);
+  vault.path_ = path;
+  vault.init_error_.reset();
+  vault.locked_ = false;
 
   return {};
 }

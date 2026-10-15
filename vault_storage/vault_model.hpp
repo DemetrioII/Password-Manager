@@ -51,6 +51,8 @@ enum class VaultError {
   VaultLocked,
   OutOfMemory,
   SerializationFailed,
+  EntryTooLarge,
+  TooManyEntries,
 };
 
 enum class FileIoError {
@@ -66,15 +68,15 @@ struct PasswordEntry {
   std::string title;
   std::string login;
   EncryptedField password;
-  Nonce nonce;
+
   std::string notes;
 
   // Purges the plaintext in-memory metadata. The `id` (needed for lookup) and
   // the password ciphertext (still usable after a fast unlock) are preserved.
   void wipeMetadata() noexcept {
-    std::fill(title.begin(), title.end(), '\0');
-    std::fill(login.begin(), login.end(), '\0');
-    std::fill(notes.begin(), notes.end(), '\0');
+    sodium_memzero(title.data(), title.size());
+    sodium_memzero(login.data(), login.size());
+    sodium_memzero(notes.data(), notes.size());
   }
 };
 

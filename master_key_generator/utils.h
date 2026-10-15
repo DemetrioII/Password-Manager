@@ -8,7 +8,7 @@
 #include <string>
 #include <variant>
 
-#define MAX_VAULT_SIZE 1024 * 64 * 8
+#define MAX_VAULT_SIZE (1024ULL * 1024ULL * 8ULL)
 #define MAX_ENTRIES 1000
 #define MAX_TITLE_SIZE 512
 #define MAX_LOGIN_SIZE 1024

@@ -1,6 +1,8 @@
 #include "vault_storage/vault.h"
+#include "vault_storage/vault_serializer.h"
 
 #include <chrono>
+#include <filesystem>
 #include <string>
 #include <utility>
 
@@ -395,4 +397,331 @@ TEST_F(VaultTest, AddFindAndRemoveWorkTogether) {
   EXPECT_EQ((*found)->title, "Google");
 }
 
+
+TEST_F(VaultTest, UpdatePreservesUuidAndChangesFields) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"master-password"});
+  vault.Init();
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"secret"}));
+  const auto id = vault.Entries()[0].id;
+  ASSERT_TRUE(vault.Update(id, "New", "bob", SecureString{"secret2"}));
+  ASSERT_EQ(vault.Entries().size(), 1u);
+  EXPECT_EQ(vault.Entries()[0].id, id);
+  EXPECT_EQ(vault.Entries()[0].title, "New");
+  EXPECT_EQ(vault.Entries()[0].login, "bob");
+  auto pw = vault.ShowPassword(id);
+  ASSERT_TRUE(pw.has_value());
+  EXPECT_EQ(pw->view(), "secret2");
+}
+
+TEST_F(VaultTest, UpdateMissingEntryReturnsEntryNotFound) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"p"});
+  vault.Init();
+  const vault::UUID id(16, '\0');
+  auto res = vault.Update(id, "t", "l", SecureString{"x"});
+  ASSERT_FALSE(res.has_value());
+  EXPECT_EQ(res.error(), vault::VaultError::EntryNotFound);
+}
+
+TEST_F(VaultTest, UpdateLockedVaultReturnsVaultLocked) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"p"});
+  vault.Init();
+  ASSERT_TRUE(vault.Add("t", "l", SecureString{"x"}));
+  const auto id = vault.Entries()[0].id;
+  vault.Lock();
+  auto res = vault.Update(id, "t", "l", SecureString{"x"});
+  ASSERT_FALSE(res.has_value());
+  EXPECT_EQ(res.error(), vault::VaultError::VaultLocked);
+}
+
+TEST_F(VaultTest, SetNotesWorks) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"p"});
+  vault.Init();
+  ASSERT_TRUE(vault.Add("t", "l", SecureString{"x"}));
+  const auto id = vault.Entries()[0].id;
+  ASSERT_TRUE(vault.SetNotes(id, "notes"));
+  EXPECT_EQ(vault.Entries()[0].notes, "notes");
+}
+
+TEST_F(VaultTest, SetNotesMissingReturnsEntryNotFound) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"p"});
+  vault.Init();
+  const vault::UUID id(16, '\0');
+  auto res = vault.SetNotes(id, "n");
+  ASSERT_FALSE(res.has_value());
+  EXPECT_EQ(res.error(), vault::VaultError::EntryNotFound);
+}
+
+TEST_F(VaultTest, SetNotesLockedReturnsVaultLocked) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"p"});
+  vault.Init();
+  ASSERT_TRUE(vault.Add("t", "l", SecureString{"x"}));
+  const auto id = vault.Entries()[0].id;
+  vault.Lock();
+  auto res = vault.SetNotes(id, "n");
+  ASSERT_FALSE(res.has_value());
+  EXPECT_EQ(res.error(), vault::VaultError::VaultLocked);
+}
+
+TEST_F(VaultTest, AddRejectsOversizeTitle) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"p"});
+  vault.Init();
+  std::string big(MAX_TITLE_SIZE + 1, 'a');
+  auto res = vault.Add(big, "l", SecureString{"x"});
+  ASSERT_FALSE(res.has_value());
+  EXPECT_EQ(res.error(), vault::VaultError::EntryTooLarge);
+}
+
+TEST_F(VaultTest, AddAcceptsTitleAtLimit) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"p"});
+  vault.Init();
+  std::string at_limit(MAX_TITLE_SIZE, 'a');
+  auto res = vault.Add(at_limit, "l", SecureString{"x"});
+  ASSERT_TRUE(res.has_value());
+  EXPECT_EQ(vault.Entries()[0].title.size(),
+            static_cast<std::size_t>(MAX_TITLE_SIZE));
+}
+
+TEST_F(VaultTest, AddRejectsOversizeLogin) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"p"});
+  vault.Init();
+  std::string big(MAX_LOGIN_SIZE + 1, 'a');
+  auto res = vault.Add("t", big, SecureString{"x"});
+  ASSERT_FALSE(res.has_value());
+  EXPECT_EQ(res.error(), vault::VaultError::EntryTooLarge);
+}
+
+TEST_F(VaultTest, AddRejectsTooManyEntries) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"p"});
+  vault.Init();
+  for (int i = 0; i < MAX_ENTRIES; ++i) {
+    ASSERT_TRUE(vault.Add("t" + std::to_string(i), "l", SecureString{"x"}));
+  }
+  auto res = vault.Add("t", "l", SecureString{"x"});
+  ASSERT_FALSE(res.has_value());
+  EXPECT_EQ(res.error(), vault::VaultError::TooManyEntries);
+}
+
+TEST_F(VaultTest, UpdateRejectsOversizeTitle) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"p"});
+  vault.Init();
+  ASSERT_TRUE(vault.Add("t", "l", SecureString{"x"}));
+  const auto id = vault.Entries()[0].id;
+  std::string big(MAX_TITLE_SIZE + 1, 'a');
+  auto res = vault.Update(id, big, "l", SecureString{"x"});
+  ASSERT_FALSE(res.has_value());
+  EXPECT_EQ(res.error(), vault::VaultError::EntryTooLarge);
+}
+
+TEST_F(VaultTest, SetNotesRejectsOversize) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"p"});
+  vault.Init();
+  ASSERT_TRUE(vault.Add("t", "l", SecureString{"x"}));
+  const auto id = vault.Entries()[0].id;
+  std::string big(MAX_NOTES_SIZE + 1, 'a');
+  auto res = vault.SetNotes(id, big);
+  ASSERT_FALSE(res.has_value());
+  EXPECT_EQ(res.error(), vault::VaultError::EntryTooLarge);
+}
+
+TEST_F(VaultTest, SetPasswordRejectsWrongOldPassword) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"old"});
+  vault.Init();
+  ASSERT_TRUE(vault.Add("t", "l", SecureString{"pw"}));
+  vault.Lock();
+  ASSERT_TRUE(vault.Unlock(SecureString{"old"}));
+  const std::string path = std::filesystem::temp_directory_path() / "setpw_bad.vault";
+  auto res = vault.SetPassword(SecureString{"wrong"}, SecureString{"new"}, path);
+  ASSERT_FALSE(res.has_value());
+  EXPECT_EQ(res.error(), vault::VaultError::WrongPassword);
+}
+
+TEST_F(VaultTest, SetPasswordWorksAndChangesPassword) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"old"});
+  vault.Init();
+  ASSERT_TRUE(vault.Add("t", "l", SecureString{"pw"}));
+  const std::string path = std::filesystem::temp_directory_path() / "setpw_ok.vault";
+  auto res = vault.SetPassword(SecureString{"old"}, SecureString{"new"}, path);
+  ASSERT_TRUE(res.has_value());
+  vault.Lock();
+  ASSERT_FALSE(vault.Unlock(SecureString{"old"}));
+  ASSERT_TRUE(vault.Unlock(SecureString{"new"}));
+}
+
+// -----------------------------------------------------------------------------
+// UnlockAndReload()
+// -----------------------------------------------------------------------------
+
+TEST_F(VaultTest, UnlockAndReloadRestoresMetadataAfterLock) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"master-password"});
+  vault.Init();
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"super-secret"}));
+  const auto id = vault.Entries()[0].id;
+  ASSERT_TRUE(vault.SetNotes(id, "test notes"));
+
+  const auto path =
+      std::filesystem::temp_directory_path() / "reload_restore.vault";
+  ASSERT_TRUE(vault::service::save(SecureString{"master-password"},
+                                   path.string(), vault)
+                  .has_value());
+  EXPECT_EQ(vault.path(), path.string());
+
+  vault.Lock();
+  ASSERT_TRUE(vault.locked());
+  EXPECT_TRUE(vault.Entries().empty());
+
+  auto result = vault.UnlockAndReload(SecureString{"master-password"});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_FALSE(vault.locked());
+
+  ASSERT_EQ(vault.Entries().size(), 1u);
+  EXPECT_EQ(vault.Entries()[0].id, id);
+  EXPECT_EQ(vault.Entries()[0].title, "GitHub");
+  EXPECT_EQ(vault.Entries()[0].login, "alice");
+  EXPECT_EQ(vault.Entries()[0].notes, "test notes");
+
+  auto password = vault.ShowPassword(id);
+  ASSERT_TRUE(password.has_value());
+  EXPECT_EQ(password->view(), "super-secret");
+}
+
+TEST_F(VaultTest, UnlockAndReloadWrongPasswordKeepsVaultLocked) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"master-password"});
+  vault.Init();
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"super-secret"}));
+
+  const auto path =
+      std::filesystem::temp_directory_path() / "reload_wrong.vault";
+  ASSERT_TRUE(vault::service::save(SecureString{"master-password"},
+                                   path.string(), vault)
+                  .has_value());
+
+  vault.Lock();
+
+  auto wrong = vault.UnlockAndReload(SecureString{"wrong-password"});
+  ASSERT_FALSE(wrong.has_value());
+  EXPECT_EQ(wrong.error(), vault::VaultError::WrongPassword);
+  EXPECT_TRUE(vault.locked());
+  // Metadata is not leaked while locked.
+  EXPECT_TRUE(vault.Entries().empty());
+
+  // A retry with the right password still succeeds and restores metadata.
+  auto good = vault.UnlockAndReload(SecureString{"master-password"});
+  ASSERT_TRUE(good.has_value());
+  ASSERT_EQ(vault.Entries().size(), 1u);
+  EXPECT_EQ(vault.Entries()[0].title, "GitHub");
+}
+
+TEST_F(VaultTest, UnlockAndReloadWithoutPathFallsBackToFastUnlock) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"master-password"});
+  vault.Init();
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"super-secret"}));
+  const auto id = vault.Entries()[0].id;
+
+  EXPECT_TRUE(vault.path().empty());
+
+  vault.Lock();
+
+  auto result = vault.UnlockAndReload(SecureString{"master-password"});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_FALSE(vault.locked());
+
+  // Without a backing file the decrypted password is usable again even though
+  // the wiped metadata cannot be recovered.
+  auto password = vault.ShowPassword(id);
+  ASSERT_TRUE(password.has_value());
+  EXPECT_EQ(password->view(), "super-secret");
+}
+
+// -----------------------------------------------------------------------------
+// F-01: password size invariant (writer must match reader limits)
+// -----------------------------------------------------------------------------
+
+namespace {
+constexpr std::size_t kMaxPasswordPlaintext =
+    MAX_PASSWORD_CIPHERTEXT_SIZE - crypto_aead_xchacha20poly1305_ietf_ABYTES;
+} // namespace
+
+TEST_F(VaultTest, AddAcceptsPasswordAtCiphertextLimit) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"p"});
+  vault.Init();
+
+  SecureString at_limit{std::string(kMaxPasswordPlaintext, 'a')};
+
+  auto res = vault.Add("t", "l", at_limit);
+  ASSERT_TRUE(res.has_value());
+  ASSERT_EQ(vault.Entries().size(), 1u);
+  EXPECT_EQ(vault.Entries()[0].password.ciphertext.size(),
+            static_cast<std::size_t>(MAX_PASSWORD_CIPHERTEXT_SIZE));
+}
+
+TEST_F(VaultTest, AddRejectsPasswordAboveCiphertextLimit) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"p"});
+  vault.Init();
+
+  SecureString over_limit{std::string(kMaxPasswordPlaintext + 1, 'a')};
+
+  auto res = vault.Add("t", "l", over_limit);
+  ASSERT_FALSE(res.has_value());
+  EXPECT_EQ(res.error(), vault::VaultError::EntryTooLarge);
+  EXPECT_TRUE(vault.Entries().empty());
+}
+
+TEST_F(VaultTest, AddRejectsOversizePasswordCiphertext) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"p"});
+  vault.Init();
+
+  vault::PasswordEntry entry;
+  entry.title = "t";
+  entry.login = "l";
+  entry.password.ciphertext.assign(MAX_PASSWORD_CIPHERTEXT_SIZE + 1, 0);
+  entry.password.nonce = NonceManager::generate<XChaCha20Poly1305Nonce>();
+
+  auto res = vault.Add(std::move(entry));
+  ASSERT_FALSE(res.has_value());
+  EXPECT_EQ(res.error(), vault::VaultError::EntryTooLarge);
+  EXPECT_TRUE(vault.Entries().empty());
+}
+
+TEST_F(VaultTest, UpdateRejectsPasswordAboveCiphertextLimit) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"p"});
+  vault.Init();
+  ASSERT_TRUE(vault.Add("t", "l", SecureString{"old"}));
+  const auto id = vault.Entries()[0].id;
+  const auto original_size = vault.Entries()[0].password.ciphertext.size();
+
+  SecureString over_limit{std::string(kMaxPasswordPlaintext + 1, 'a')};
+
+  auto res = vault.Update(id, "t", "l", over_limit);
+  ASSERT_FALSE(res.has_value());
+  EXPECT_EQ(res.error(), vault::VaultError::EntryTooLarge);
+  EXPECT_EQ(vault.Entries()[0].password.ciphertext.size(), original_size);
+}
+
+TEST_F(VaultTest, PasswordAtLimitSurvivesSaveAndLoad) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"master-password"});
+  vault.Init();
+
+  SecureString at_limit{std::string(kMaxPasswordPlaintext, 'p')};
+  ASSERT_TRUE(vault.Add("title", "login", at_limit));
+  const auto id = vault.Entries()[0].id;
+
+  const auto path =
+      std::filesystem::temp_directory_path() / "password_at_limit.vault";
+  ASSERT_TRUE(vault::service::save(SecureString{"master-password"},
+                                   path.string(), vault)
+                  .has_value());
+
+  auto reloaded = VaultWithThrottlingDisabled(SecureString{"unused"});
+  ASSERT_TRUE(vault::service::load(SecureString{"master-password"},
+                                   path.string(), reloaded)
+                  .has_value());
+  ASSERT_EQ(reloaded.Entries().size(), 1u);
+
+  auto restored = reloaded.ShowPassword(id);
+  ASSERT_TRUE(restored.has_value());
+  EXPECT_EQ(restored->size(), kMaxPasswordPlaintext);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
 } // namespace

@@ -980,4 +980,92 @@ TEST_F(VaultSerializerTest, TamperedVaultNonceIsDetected) {
   EXPECT_EQ(result.error(), vault::VaultError::CryptoError);
 }
 
+TEST_F(VaultSerializerTest, SetPasswordRekeyRoundTrip) {
+  SecureString pw{"old"};
+  vault::Vault vault{std::move(pw)};
+  vault.Init();
+  ASSERT_TRUE(vault.Add("t", "l", SecureString{"secret"}));
+  const auto path = std::filesystem::temp_directory_path() / "rekey_test.vault";
+  SecureString oldpw{"old"};
+  SecureString newpw{"new"};
+  ASSERT_TRUE(vault.SetPassword(std::move(oldpw), std::move(newpw), path.string()).has_value());
+  vault::Vault loaded{SecureString{"old"}};
+  EXPECT_EQ(vault::service::load(SecureString{"old"}, path.string(), loaded).error(),
+            vault::VaultError::CryptoError);
+  vault::Vault loaded2{SecureString{"new"}};
+  ASSERT_TRUE(vault::service::load(SecureString{"new"}, path.string(), loaded2).has_value());
+  ASSERT_EQ(loaded2.Entries().size(), 1u);
+  auto sp = loaded2.ShowPassword(loaded2.Entries()[0].id);
+  ASSERT_TRUE(sp.has_value());
+  EXPECT_EQ(sp->view(), "secret");
+}
+
+// -----------------------------------------------------------------------------
+// F-01: writer/reader size limits must agree
+// -----------------------------------------------------------------------------
+
+TEST_F(VaultSerializerTest, SizeLimitPredicateMatchesReaderLimit) {
+  EXPECT_TRUE(
+      vault::vault_file_within_limit(static_cast<std::size_t>(MAX_VAULT_SIZE)));
+  EXPECT_FALSE(vault::vault_file_within_limit(
+      static_cast<std::size_t>(MAX_VAULT_SIZE) + 1));
+}
+
+TEST_F(VaultSerializerTest, FullVaultFitsSizeLimitAndRoundTrips) {
+  vault::Vault original{SecureString{"master-password"}};
+  original.Init();
+
+  const std::string title(MAX_TITLE_SIZE, 't');
+  const std::string login(MAX_LOGIN_SIZE, 'l');
+  const std::string notes(MAX_NOTES_SIZE, 'n');
+  constexpr std::size_t kMaxPlain =
+      MAX_PASSWORD_CIPHERTEXT_SIZE - crypto_aead_xchacha20poly1305_ietf_ABYTES;
+  const SecureString password{std::string(kMaxPlain, 'p')};
+
+  for (int i = 0; i < MAX_ENTRIES; ++i) {
+    ASSERT_TRUE(original.Add(title, login, password));
+  }
+  for (const auto &entry : original.Entries()) {
+    ASSERT_TRUE(original.SetNotes(entry.id, notes));
+  }
+
+  ASSERT_TRUE(vault::Serializator::serialize(SecureString{"master-password"},
+                                             path_.string(), original));
+
+  const auto size =
+      static_cast<std::size_t>(std::filesystem::file_size(path_));
+  EXPECT_LE(size, static_cast<std::size_t>(MAX_VAULT_SIZE));
+  EXPECT_TRUE(vault::vault_file_within_limit(size));
+
+  vault::Vault restored{SecureString{"unused"}};
+  ASSERT_TRUE(vault::Serializator::deserialize(SecureString{"master-password"},
+                                               path_.string(), restored));
+  ASSERT_EQ(restored.Entries().size(), static_cast<std::size_t>(MAX_ENTRIES));
+  EXPECT_EQ(restored.Entries()[0].title.size(),
+            static_cast<std::size_t>(MAX_TITLE_SIZE));
+  EXPECT_EQ(restored.Entries()[0].login.size(),
+            static_cast<std::size_t>(MAX_LOGIN_SIZE));
+  EXPECT_EQ(restored.Entries()[0].notes.size(),
+            static_cast<std::size_t>(MAX_NOTES_SIZE));
+}
+
+TEST_F(VaultSerializerTest, PasswordAtLimitFitsSizeLimitAndRoundTrips) {
+  vault::Vault original{SecureString{"master-password"}};
+  original.Init();
+
+  constexpr std::size_t kMaxPlain =
+      MAX_PASSWORD_CIPHERTEXT_SIZE - crypto_aead_xchacha20poly1305_ietf_ABYTES;
+  SecureString at_limit{std::string(kMaxPlain, 'p')};
+  ASSERT_TRUE(original.Add("title", "login", at_limit));
+
+  ASSERT_TRUE(vault::Serializator::serialize(SecureString{"master-password"},
+                                             path_.string(), original));
+  EXPECT_LE(std::filesystem::file_size(path_),
+            static_cast<std::uintmax_t>(MAX_VAULT_SIZE));
+
+  vault::Vault restored{SecureString{"unused"}};
+  ASSERT_TRUE(vault::Serializator::deserialize(SecureString{"master-password"},
+                                               path_.string(), restored));
+  ASSERT_EQ(restored.Entries().size(), 1u);
+}
 } // namespace

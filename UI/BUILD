@@ -39,5 +39,6 @@ qt_cc_binary(
 		"//vault_storage:vault",
 		"//UI/forms:forms",
 		"//process_hardening:process_hardening",
+		"//password_generator:password_generator",
     ],
 )

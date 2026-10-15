@@ -1,7 +1,9 @@
 #pragma once
 #include "vault_storage/vault.h"
 #include "vault_storage/vault_serializer.h"
+#include <string>
 #include <QApplication>
+#include <QByteArray>
 #include <QClipboard>
 #include <QEnterEvent>
 #include <QFrame>
@@ -15,14 +17,31 @@
 #include <QVBoxLayout>
 #include <QtWidgets>
 
+class MainWindow;
+
+// User facing text for every VaultError value. Never returns an empty string.
+QString describe(vault::VaultError error);
+
+// Above this entry count the per-card shadow/blur animation is skipped: a vault
+// may hold MAX_ENTRIES (1000) cards and the blur effect does not scale.
+inline constexpr int kHeavyEffectsEntryLimit = 50;
+
+// How long a copied password is allowed to sit in the system clipboard.
+inline constexpr int kClipboardClearDelayMs = 30000;
+
 class PasswordItemWidget : public QFrame {
   Q_OBJECT
 public:
-  explicit PasswordItemWidget(const vault::PasswordEntry &entry,
-                              const vault::Vault &vault, const vault::UUID &ID,
-                              QWidget *parent = nullptr);
+  PasswordItemWidget(const vault::PasswordEntry &entry, const vault::Vault &vault,
+                     const vault::UUID &ID, MainWindow *owner,
+                     bool lightweightEffects, QWidget *parent = nullptr);
 
   vault::UUID get_id() const;
+
+  QString title() const { return titleLabel_->text(); }
+
+  // Hides a revealed password again and drops the plaintext from the field.
+  void hidePassword();
 
   ~PasswordItemWidget() override = default;
 
@@ -37,9 +56,11 @@ private:
   QToolButton *showButton_;
   QToolButton *copyButton_;
   const vault::Vault *vault_;
+  MainWindow *owner_;
   vault::UUID id_;
-  QGraphicsDropShadowEffect *shadowEffect_;
-  QPropertyAnimation *hoverAnimation_;
+  bool lightweightEffects_;
+  QGraphicsDropShadowEffect *shadowEffect_{nullptr};
+  QPropertyAnimation *hoverAnimation_{nullptr};
 };
 
 class MainWindow : public QMainWindow {
@@ -55,10 +76,35 @@ public:
 
   bool unlock(SecureString &&password);
 
+  // Drops every secret from the UI and the vault, then hides the window
+  // without tearing the event loop down.
+  void lock();
+
+  // Shows the unlock prompt until the password is accepted or the user gives
+  // up. Returns false when the user cancelled.
+  bool requestUnlock();
+
+  void setVaultPath(std::string path);
+
+  // Called by a card after it put a password into the clipboard. Records the
+  // secret by fingerprint (never by value) and arms the auto-clear timer.
+  void noteClipboardCopy(const QString &secret);
+
+  // Clears the clipboard only while it still holds the secret we put there.
+  void clearClipboardIfOwned();
+
 private:
+  PasswordItemWidget *currentWidget() const;
+
   QListWidget *passwords_;
   QLineEdit *search_;
 
   bool locked_{false};
   vault::Vault vault_;
+
+  // Path of the vault file this window is bound to, or empty until the user
+  // saves or loads one. Drives the reload-based unlock after a lock.
+  std::string vaultPath_;
+
+  QByteArray clipboardFingerprint_;
 };

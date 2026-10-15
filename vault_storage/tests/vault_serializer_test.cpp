@@ -16,21 +16,26 @@ const Argon2Salt &salt_bytes(const Salt &salt) {
   return std::get<Argon2Salt>(salt);
 }
 
-const XChaCha20Poly1305Nonce &nonce_bytes(const Nonce &nonce) {
-  return std::get<XChaCha20Poly1305Nonce>(nonce);
+bool is_chacha_cipher(password_manager::CipherAlgorithm cipher) {
+  return cipher == password_manager::CIPHER_ALGORITHM_CHACHA20_POLY1305_IETF;
 }
 
-// Adds a fully valid entry (encrypted password + fresh nonce) to `entries`.
+// Adds a fully valid entry (encrypted password + fresh nonce) to `entries`,
+// with the nonce length the file cipher requires.
 void add_entry(password_manager::EncryptedEntries &entries, const Key &master_key,
                std::string id, std::string title, std::string login,
-               std::string plaintext, std::string notes) {
+               std::string plaintext, std::string notes,
+               password_manager::CipherAlgorithm cipher =
+                   password_manager::CIPHER_ALGORITHM_XCHACHA20_POLY1305_IETF) {
   auto *e = entries.add_entries();
   e->set_id(std::move(id));
   e->set_title(std::move(title));
   e->set_login(std::move(login));
   e->set_notes(std::move(notes));
 
-  Nonce nonce = NonceManager::generate<XChaCha20Poly1305Nonce>();
+  Nonce nonce = is_chacha_cipher(cipher)
+                    ? NonceManager::generate<ChaCha20Poly1305Nonce>()
+                    : NonceManager::generate<XChaCha20Poly1305Nonce>();
   std::visit(
       [&](const auto &n) {
         SecureString ciphertext =
@@ -43,10 +48,16 @@ void add_entry(password_manager::EncryptedEntries &entries, const Key &master_ke
 
 // Builds a complete encrypted vault file whose inner entries are produced by
 // `fill`, so tests can craft entries that stress the deserializer validation.
+// `version` 0 produces a legacy header-only-AAD file; 1/2 seal the descriptor
+// into the AAD the way the real serializer does. `cipher` selects the AEAD
+// (i.e. the nonce length).
 bool write_crafted_vault(
     const std::filesystem::path &path, const std::string &master_password,
     const std::function<void(password_manager::EncryptedEntries &,
-                             const Key &)> &fill) {
+                             const Key &)> &fill,
+    std::uint32_t version = 0,
+    password_manager::CipherAlgorithm cipher =
+        password_manager::CIPHER_ALGORITHM_XCHACHA20_POLY1305_IETF) {
   const Salt meta_salt = SaltManager::generateSalt<Argon2Salt>();
   const Salt master_salt = SaltManager::generateSalt<Argon2Salt>();
   const Salt ephemeral_salt = SaltManager::generateSalt<Argon2Salt>();
@@ -61,13 +72,42 @@ bool write_crafted_vault(
   if (!entries.SerializeToString(&serialized))
     return false;
 
-  Nonce vault_nonce = NonceManager::generate<XChaCha20Poly1305Nonce>();
+  Nonce vault_nonce = is_chacha_cipher(cipher)
+                          ? NonceManager::generate<ChaCha20Poly1305Nonce>()
+                          : NonceManager::generate<XChaCha20Poly1305Nonce>();
   const vault::VaultHeader header =
       vault::make_header(meta_salt, master_salt, ephemeral_salt, vault_nonce);
 
-  std::vector<unsigned char> cipher_blob = CryptoService::encrypt(
-      serialized.data(), serialized.size(), header.data(), header.size(),
-      nonce_bytes(vault_nonce), keys.meta_key);
+  std::vector<unsigned char> cipher_blob;
+  std::visit(
+      [&](const auto &nonce_value) {
+        if (version == 0) {
+          cipher_blob = CryptoService::encrypt(
+              serialized.data(), serialized.size(), header.data(), header.size(),
+              nonce_value, keys.meta_key);
+        } else {
+          const vault::VaultDescriptor descriptor{
+              .version = version,
+              .kdf_algorithm = vault::kKdfAlgorithmArgon2id13,
+              .kdf_ops_limit = kCurrentKdfProfile.ops_limit,
+              .kdf_mem_limit = kCurrentKdfProfile.mem_limit,
+              .salt_algorithm = vault::kSaltAlgorithmArgon2,
+              .nonce_algorithm = vault::nonce_algorithm_id(
+                  is_chacha_cipher(cipher)
+                      ? vault::CipherAlgorithm::ChaCha20Poly1305
+                      : vault::CipherAlgorithm::XChaCha20Poly1305),
+              .cipher_algorithm = vault::cipher_algorithm_id(
+                  is_chacha_cipher(cipher)
+                      ? vault::CipherAlgorithm::ChaCha20Poly1305
+                      : vault::CipherAlgorithm::XChaCha20Poly1305),
+          };
+          const vault::VaultAad aad = vault::make_aad(descriptor, header);
+          cipher_blob = CryptoService::encrypt(
+              serialized.data(), serialized.size(), aad.data(), aad.size(),
+              nonce_value, keys.meta_key);
+        }
+      },
+      vault_nonce);
 
   password_manager::VaultProto proto;
   proto.set_meta_salt(reinterpret_cast<const char *>(salt_bytes(meta_salt).data()),
@@ -78,11 +118,28 @@ bool write_crafted_vault(
   proto.set_ephemeral_salt(
       reinterpret_cast<const char *>(salt_bytes(ephemeral_salt).data()),
       salt_bytes(ephemeral_salt).size());
-  proto.set_nonce(
-      reinterpret_cast<const char *>(nonce_bytes(vault_nonce).data()),
-      nonce_bytes(vault_nonce).size());
   proto.set_entries(reinterpret_cast<const char *>(cipher_blob.data()),
                     cipher_blob.size());
+  std::visit(
+      [&proto](const auto &nonce_value) {
+        proto.set_nonce(reinterpret_cast<const char *>(nonce_value.data()),
+                        nonce_value.size());
+      },
+      vault_nonce);
+
+  if (version != 0) {
+    proto.set_version(version);
+    proto.set_salt_algorithm(password_manager::SALT_ALGORITHM_ARGON2);
+    proto.set_nonce_algorithm(
+        is_chacha_cipher(cipher)
+            ? password_manager::NONCE_ALGORITHM_CHACHA20_POLY1305_IETF
+            : password_manager::NONCE_ALGORITHM_XCHACHA20_POLY1305_IETF);
+    proto.set_cipher_algorithm(cipher);
+    proto.mutable_kdf()->set_algorithm(
+        password_manager::KDF_ALGORITHM_ARGON2ID13);
+    proto.mutable_kdf()->set_ops_limit(kCurrentKdfProfile.ops_limit);
+    proto.mutable_kdf()->set_mem_limit(kCurrentKdfProfile.mem_limit);
+  }
 
   std::string final_serialized;
   if (!proto.SerializeToString(&final_serialized))
@@ -798,7 +855,7 @@ TEST_F(VaultSerializerTest, WriteAtomicLeavesNoTempFiles) {
   }
 }
 
-TEST_F(VaultSerializerTest, SerializeWritesVersionOneDescriptor) {
+TEST_F(VaultSerializerTest, SerializeWritesVersionTwoDescriptor) {
   vault::Vault vault{SecureString{"hello"}};
   vault.Init();
   ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"secret"}));
@@ -809,7 +866,7 @@ TEST_F(VaultSerializerTest, SerializeWritesVersionOneDescriptor) {
   password_manager::VaultProto proto;
   ASSERT_TRUE(read_vault_proto(path_, proto));
 
-  EXPECT_EQ(proto.version(), vault::kVaultFormatVersion);
+  EXPECT_EQ(proto.version(), 2u);
   EXPECT_EQ(proto.kdf().algorithm(), password_manager::KDF_ALGORITHM_ARGON2ID13);
   EXPECT_EQ(proto.kdf().ops_limit(), kCurrentKdfProfile.ops_limit);
   EXPECT_EQ(proto.kdf().mem_limit(), kCurrentKdfProfile.mem_limit);
@@ -818,6 +875,227 @@ TEST_F(VaultSerializerTest, SerializeWritesVersionOneDescriptor) {
             password_manager::NONCE_ALGORITHM_XCHACHA20_POLY1305_IETF);
   EXPECT_EQ(proto.cipher_algorithm(),
             password_manager::CIPHER_ALGORITHM_XCHACHA20_POLY1305_IETF);
+  ASSERT_EQ(proto.nonce().size(),
+            crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+}
+
+TEST_F(VaultSerializerTest, ChaCha20CipherRoundTripsAndWritesVersionTwo) {
+  vault::Vault original{SecureString{"session"}};
+  original.Init();
+  original.set_cipher(vault::CipherAlgorithm::ChaCha20Poly1305);
+  ASSERT_TRUE(original.Add("GitHub", "alice", SecureString{"secret"}));
+
+  ASSERT_TRUE(vault::Serializator::serialize(SecureString{"master-password"},
+                                             path_.string(), original));
+
+  password_manager::VaultProto proto;
+  ASSERT_TRUE(read_vault_proto(path_, proto));
+  EXPECT_EQ(proto.version(), 2u);
+  EXPECT_EQ(proto.nonce_algorithm(),
+            password_manager::NONCE_ALGORITHM_CHACHA20_POLY1305_IETF);
+  EXPECT_EQ(proto.cipher_algorithm(),
+            password_manager::CIPHER_ALGORITHM_CHACHA20_POLY1305_IETF);
+  ASSERT_EQ(proto.nonce().size(), crypto_aead_chacha20poly1305_ietf_NPUBBYTES);
+
+  vault::Vault restored{SecureString{"session2"}};
+  restored.Init();
+
+  ASSERT_TRUE(vault::Serializator::deserialize(SecureString{"master-password"},
+                                               path_.string(), restored));
+  ASSERT_EQ(restored.Entries().size(), 1u);
+  EXPECT_EQ(restored.Entries()[0].title, "GitHub");
+  EXPECT_EQ(restored.cipher(), vault::CipherAlgorithm::ChaCha20Poly1305);
+
+  auto sp = restored.ShowPassword(restored.Entries()[0].id);
+  ASSERT_TRUE(sp.has_value());
+  EXPECT_EQ(sp->view(), "secret");
+}
+
+TEST_F(VaultSerializerTest, DefaultCipherRoundTripsAsVersionTwoXChaCha) {
+  vault::Vault original{SecureString{"session"}};
+  original.Init();
+  ASSERT_TRUE(original.Add("GitHub", "alice", SecureString{"secret"}));
+
+  ASSERT_TRUE(vault::Serializator::serialize(SecureString{"master-password"},
+                                             path_.string(), original));
+
+  vault::Vault restored{SecureString{"session2"}};
+  restored.Init();
+  ASSERT_TRUE(vault::Serializator::deserialize(SecureString{"master-password"},
+                                               path_.string(), restored));
+  ASSERT_EQ(restored.Entries().size(), 1u);
+  EXPECT_EQ(restored.cipher(), vault::CipherAlgorithm::XChaCha20Poly1305);
+
+  auto sp = restored.ShowPassword(restored.Entries()[0].id);
+  ASSERT_TRUE(sp.has_value());
+  EXPECT_EQ(sp->view(), "secret");
+}
+
+TEST_F(VaultSerializerTest, VersionOneXChaChaFileStillLoads) {
+  ASSERT_TRUE(write_crafted_vault(
+      path_, "master-pw",
+      [](password_manager::EncryptedEntries &entries, const Key &master_key) {
+        add_entry(entries, master_key, "id-0001", "GitHub", "alice", "secret",
+                  "notes");
+      },
+      1, password_manager::CIPHER_ALGORITHM_XCHACHA20_POLY1305_IETF));
+
+  vault::Vault vault{SecureString{"x"}};
+  vault.Init();
+
+  const auto result = vault::Serializator::deserialize(
+      SecureString{"master-pw"}, path_.string(), vault);
+
+  ASSERT_TRUE(result.has_value());
+  ASSERT_EQ(vault.Entries().size(), 1u);
+  EXPECT_EQ(vault.Entries()[0].title, "GitHub");
+  EXPECT_EQ(vault.cipher(), vault::CipherAlgorithm::XChaCha20Poly1305);
+}
+
+TEST_F(VaultSerializerTest, VersionTwoChaChaFileLoads) {
+  ASSERT_TRUE(write_crafted_vault(
+      path_, "master-pw",
+      [](password_manager::EncryptedEntries &entries, const Key &master_key) {
+        add_entry(entries, master_key, "id-0001", "GitHub", "alice", "secret",
+                  "notes",
+                  password_manager::CIPHER_ALGORITHM_CHACHA20_POLY1305_IETF);
+      },
+      2, password_manager::CIPHER_ALGORITHM_CHACHA20_POLY1305_IETF));
+
+  vault::Vault vault{SecureString{"x"}};
+  vault.Init();
+
+  const auto result = vault::Serializator::deserialize(
+      SecureString{"master-pw"}, path_.string(), vault);
+
+  ASSERT_TRUE(result.has_value());
+  ASSERT_EQ(vault.Entries().size(), 1u);
+  EXPECT_EQ(vault.cipher(), vault::CipherAlgorithm::ChaCha20Poly1305);
+}
+
+TEST_F(VaultSerializerTest, VersionOneWithChaChaCipherIsRejected) {
+  // ChaCha20 only exists since v2; a v1 file claiming it is invalid even if
+  // the bytes would be self-consistent.
+  ASSERT_TRUE(write_crafted_vault(
+      path_, "master-pw",
+      [](password_manager::EncryptedEntries &entries, const Key &master_key) {
+        add_entry(entries, master_key, "id-0001", "GitHub", "alice", "secret",
+                  "notes",
+                  password_manager::CIPHER_ALGORITHM_CHACHA20_POLY1305_IETF);
+      },
+      1, password_manager::CIPHER_ALGORITHM_CHACHA20_POLY1305_IETF));
+
+  vault::Vault vault{SecureString{"x"}};
+  vault.Init();
+
+  const auto result = vault::Serializator::deserialize(
+      SecureString{"master-pw"}, path_.string(), vault);
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), vault::VaultError::InvalidFormat);
+}
+
+TEST_F(VaultSerializerTest, VersionTwoRejectsAlgorithmIdsMismatchedWithNonceLength) {
+  // 12-byte (ChaCha) nonce but XChaCha algorithm ids.
+  ASSERT_TRUE(write_crafted_vault(
+      path_, "master-pw",
+      [](password_manager::EncryptedEntries &entries, const Key &master_key) {
+        add_entry(entries, master_key, "id-0001", "GitHub", "alice", "secret",
+                  "notes",
+                  password_manager::CIPHER_ALGORITHM_CHACHA20_POLY1305_IETF);
+      },
+      2, password_manager::CIPHER_ALGORITHM_CHACHA20_POLY1305_IETF));
+
+  password_manager::VaultProto proto;
+  ASSERT_TRUE(read_vault_proto(path_, proto));
+  proto.set_nonce_algorithm(
+      password_manager::NONCE_ALGORITHM_XCHACHA20_POLY1305_IETF);
+  proto.set_cipher_algorithm(
+      password_manager::CIPHER_ALGORITHM_XCHACHA20_POLY1305_IETF);
+  ASSERT_TRUE(write_vault_proto(path_, proto));
+
+  vault::Vault vault{SecureString{"x"}};
+  vault.Init();
+
+  const auto result = vault::Serializator::deserialize(
+      SecureString{"master-pw"}, path_.string(), vault);
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), vault::VaultError::InvalidFormat);
+}
+
+TEST_F(VaultSerializerTest, VersionTwoRejectsDisagreeingAlgorithmIds) {
+  // nonce_algorithm and cipher_algorithm must match each other.
+  ASSERT_TRUE(write_crafted_vault(
+      path_, "master-pw",
+      [](password_manager::EncryptedEntries &entries, const Key &master_key) {
+        add_entry(entries, master_key, "id-0001", "GitHub", "alice", "secret",
+                  "notes");
+      },
+      2, password_manager::CIPHER_ALGORITHM_XCHACHA20_POLY1305_IETF));
+
+  password_manager::VaultProto proto;
+  ASSERT_TRUE(read_vault_proto(path_, proto));
+  proto.set_cipher_algorithm(
+      password_manager::CIPHER_ALGORITHM_CHACHA20_POLY1305_IETF);
+  ASSERT_TRUE(write_vault_proto(path_, proto));
+
+  vault::Vault vault{SecureString{"x"}};
+  vault.Init();
+
+  const auto result = vault::Serializator::deserialize(
+      SecureString{"master-pw"}, path_.string(), vault);
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), vault::VaultError::InvalidFormat);
+}
+
+TEST_F(VaultSerializerTest, VersionTwoRejectsEntryNonceOfWrongSize) {
+  // File is ChaCha20 (12-byte vault nonce) but an entry carries a 24-byte
+  // XChaCha nonce.
+  ASSERT_TRUE(write_crafted_vault(
+      path_, "master-pw",
+      [](password_manager::EncryptedEntries &entries, const Key &master_key) {
+        add_entry(entries, master_key, "id-0001", "GitHub", "alice", "secret",
+                  "notes",
+                  password_manager::CIPHER_ALGORITHM_CHACHA20_POLY1305_IETF);
+        add_entry(entries, master_key, "id-0002", "Google", "bob", "secret2",
+                  "notes2",
+                  password_manager::CIPHER_ALGORITHM_XCHACHA20_POLY1305_IETF);
+      },
+      2, password_manager::CIPHER_ALGORITHM_CHACHA20_POLY1305_IETF));
+
+  vault::Vault vault{SecureString{"x"}};
+  vault.Init();
+
+  const auto result = vault::Serializator::deserialize(
+      SecureString{"master-pw"}, path_.string(), vault);
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), vault::VaultError::VaultCorrupted);
+}
+
+TEST_F(VaultSerializerTest, TamperedChaChaVaultNonceIsDetected) {
+  vault::Vault vault{SecureString{"hello"}};
+  vault.Init();
+  vault.set_cipher(vault::CipherAlgorithm::ChaCha20Poly1305);
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"secret"}));
+
+  ASSERT_TRUE(write_tampered_vault(
+      path_, vault, [](password_manager::VaultProto &proto) {
+        std::string nonce = proto.nonce();
+        nonce[0] ^= 0x01;
+        proto.set_nonce(nonce);
+      }));
+
+  vault::Vault restored{SecureString{"x"}};
+  restored.Init();
+
+  const auto result = vault::Serializator::deserialize(
+      SecureString{"master-password"}, path_.string(), restored);
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), vault::VaultError::CryptoError);
 }
 
 TEST_F(VaultSerializerTest, LegacyVersionlessVaultStillLoads) {
@@ -865,8 +1143,9 @@ TEST_F(VaultSerializerTest, VersionDowngradeIsDetected) {
   vault.Init();
   ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"secret"}));
 
-  // Strip the version so a v1 file masquerades as legacy v0. The AAD no longer
-  // matches the descriptor the file was sealed with, so authentication fails.
+  // Strip the version so a versioned file masquerades as legacy v0. The AAD no
+  // longer matches the descriptor the file was sealed with, so authentication
+  // fails.
   ASSERT_TRUE(write_tampered_vault(
       path_, vault, [](password_manager::VaultProto &proto) {
         proto.clear_version();

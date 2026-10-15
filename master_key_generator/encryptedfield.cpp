@@ -2,7 +2,7 @@
 #include "master_key_generator/utils.h"
 
 SecureString EncryptedField::decrypt(const EphemeralKey &session_key) const {
-  constexpr std::size_t tag_size = crypto_aead_xchacha20poly1305_ietf_ABYTES;
+  const std::size_t tag_size = aead_tag_bytes(nonce);
   if (ciphertext.size() < tag_size) {
     throw InvalidCiphertext("Ciphertext is too short");
   }
@@ -14,7 +14,8 @@ SecureString EncryptedField::decrypt(const EphemeralKey &session_key) const {
   plain_text.mutate([&](char *out) {
     std::visit(
         [&](const auto &nonce_value) {
-          const int result = crypto_aead_xchacha20poly1305_ietf_decrypt(
+          using Params = AeadParams<std::decay_t<decltype(nonce_value)>>;
+          const int result = Params::decrypt(
               reinterpret_cast<unsigned char *>(out), &plain_text_size, nullptr,
 
               ciphertext.data(), ciphertext.size(), nullptr, 0,
@@ -23,8 +24,7 @@ SecureString EncryptedField::decrypt(const EphemeralKey &session_key) const {
               session_key.data());
 
           if (result != 0)
-            throw AuthenticationFailed(
-                "XChaCha20-Poly1305 authentication failed");
+            throw AuthenticationFailed("Poly1305 AEAD authentication failed");
         },
         nonce);
   });
@@ -37,15 +37,17 @@ SecureString EncryptedField::decrypt(const EphemeralKey &session_key) const {
 EncryptedField EncryptedField::encrypt(const SecureString &plain_text,
                                        const EphemeralKey &session_key) {
   EncryptedField field;
+  // Session fields are deliberately kept on XChaCha20: their nonce is not part
+  // of the vault-cipher negotiation and never leaves memory.
   field.nonce = NonceManager::generate<XChaCha20Poly1305Nonce>();
-  field.ciphertext.resize(plain_text.size() +
-                          crypto_aead_xchacha20poly1305_ietf_ABYTES);
+  field.ciphertext.resize(plain_text.size() + aead_tag_bytes(field.nonce));
 
   unsigned long long ciphertext_size = 0;
 
   std::visit(
       [&field, &plain_text, &session_key, &ciphertext_size](const auto &value) {
-        const int result = crypto_aead_xchacha20poly1305_ietf_encrypt(
+        using Params = AeadParams<std::decay_t<decltype(value)>>;
+        const int result = Params::encrypt(
             field.ciphertext.data(), &ciphertext_size,
 
             reinterpret_cast<const unsigned char *>(plain_text.data()),
@@ -59,7 +61,7 @@ EncryptedField EncryptedField::encrypt(const SecureString &plain_text,
             session_key.data());
 
         if (result != 0)
-          throw CryptoError("XChaCha20-Poly1305 encryption failed");
+          throw CryptoError("Poly1305 AEAD encryption failed");
       },
       field.nonce);
 

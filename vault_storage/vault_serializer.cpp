@@ -1,6 +1,50 @@
 #include "vault_storage/vault_serializer.h"
 
+#include <cstring>
 #include <unordered_set>
+
+namespace {
+
+// Fresh nonce of the length the vault cipher requires.
+Nonce generate_vault_nonce(vault::CipherAlgorithm cipher) {
+  return cipher == vault::CipherAlgorithm::ChaCha20Poly1305
+             ? NonceManager::generate<ChaCha20Poly1305Nonce>()
+             : NonceManager::generate<XChaCha20Poly1305Nonce>();
+}
+
+password_manager::NonceAlgorithm
+to_proto_nonce_algorithm(vault::CipherAlgorithm cipher) {
+  return cipher == vault::CipherAlgorithm::ChaCha20Poly1305
+             ? password_manager::NONCE_ALGORITHM_CHACHA20_POLY1305_IETF
+             : password_manager::NONCE_ALGORITHM_XCHACHA20_POLY1305_IETF;
+}
+
+password_manager::CipherAlgorithm
+to_proto_cipher_algorithm(vault::CipherAlgorithm cipher) {
+  return cipher == vault::CipherAlgorithm::ChaCha20Poly1305
+             ? password_manager::CIPHER_ALGORITHM_CHACHA20_POLY1305_IETF
+             : password_manager::CIPHER_ALGORITHM_XCHACHA20_POLY1305_IETF;
+}
+
+// Copies nonce bytes from the file into a variant holding the alternative the
+// file's cipher implies. Precondition: the byte count was validated against a
+// supported nonce length and `is_xchacha` matches it.
+Nonce nonce_from_bytes(const std::string &bytes, bool is_xchacha) {
+  Nonce nonce;
+  if (is_xchacha)
+    nonce.emplace<XChaCha20Poly1305Nonce>();
+  else
+    nonce.emplace<ChaCha20Poly1305Nonce>();
+
+  std::visit(
+      [&bytes](auto &value) {
+        std::memcpy(value.data(), bytes.data(), value.size());
+      },
+      nonce);
+  return nonce;
+}
+
+} // namespace
 
 std::expected<void, vault::VaultError>
 vault::Serializator::serialize(SecureString &&password,
@@ -14,22 +58,22 @@ vault::Serializator::serialize(SecureString &&password,
   password_manager::VaultProto proto;
   password_manager::EncryptedEntries entries;
 
+  const vault::CipherAlgorithm cipher = vault.cipher_;
+
   const vault::VaultDescriptor descriptor{
       .version = vault::kVaultFormatVersion,
       .kdf_algorithm = vault::kKdfAlgorithmArgon2id13,
       .kdf_ops_limit = vault.kdf_.ops_limit,
       .kdf_mem_limit = vault.kdf_.mem_limit,
       .salt_algorithm = vault::kSaltAlgorithmArgon2,
-      .nonce_algorithm = vault::kNonceAlgorithmXChaCha20Poly1305,
-      .cipher_algorithm = vault::kCipherAlgorithmXChaCha20Poly1305,
+      .nonce_algorithm = vault::nonce_algorithm_id(cipher),
+      .cipher_algorithm = vault::cipher_algorithm_id(cipher),
   };
 
   proto.set_version(descriptor.version);
   proto.set_salt_algorithm(password_manager::SALT_ALGORITHM_ARGON2);
-  proto.set_nonce_algorithm(
-      password_manager::NONCE_ALGORITHM_XCHACHA20_POLY1305_IETF);
-  proto.set_cipher_algorithm(
-      password_manager::CIPHER_ALGORITHM_XCHACHA20_POLY1305_IETF);
+  proto.set_nonce_algorithm(to_proto_nonce_algorithm(cipher));
+  proto.set_cipher_algorithm(to_proto_cipher_algorithm(cipher));
   proto.mutable_kdf()->set_algorithm(password_manager::KDF_ALGORITHM_ARGON2ID13);
   proto.mutable_kdf()->set_ops_limit(descriptor.kdf_ops_limit);
   proto.mutable_kdf()->set_mem_limit(descriptor.kdf_mem_limit);
@@ -57,7 +101,7 @@ vault::Serializator::serialize(SecureString &&password,
     return std::unexpected(vault::VaultError::OutOfMemory);
   }
 
-  Nonce vault_nonce = NonceManager::generate<XChaCha20Poly1305Nonce>();
+  Nonce vault_nonce = generate_vault_nonce(cipher);
 
   vault::VaultHeader header =
       vault::make_header(vault.meta_salt_, vault.master_salt_,
@@ -72,7 +116,7 @@ vault::Serializator::serialize(SecureString &&password,
     e->set_title(entry.title);
     e->set_login(entry.login);
 
-    Nonce nonce = NonceManager::generate<XChaCha20Poly1305Nonce>();
+    Nonce nonce = generate_vault_nonce(cipher);
 
     try {
       auto ciphertext = CryptoService::cypher(
@@ -172,8 +216,18 @@ vault::Serializator::deserialize(SecureString &&password,
 
   if (proto.meta_salt().size() != crypto_pwhash_SALTBYTES ||
       proto.master_salt().size() != crypto_pwhash_SALTBYTES ||
-      proto.nonce().size() != crypto_aead_xchacha20poly1305_ietf_NPUBBYTES ||
       proto.ephemeral_salt().size() != crypto_pwhash_SALTBYTES)
+    return std::unexpected(vault::VaultError::VaultCorrupted);
+
+  // The nonce length alone selects the AEAD: 24 bytes → XChaCha20, 12 →
+  // ChaCha20 (both Poly1305 IETF). Any other length cannot correspond to a
+  // supported primitive.
+  const bool nonce_is_xchacha =
+      proto.nonce().size() == crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
+  const bool nonce_is_chacha =
+      proto.nonce().size() == crypto_aead_chacha20poly1305_ietf_NPUBBYTES;
+
+  if (!nonce_is_xchacha && !nonce_is_chacha)
     return std::unexpected(vault::VaultError::VaultCorrupted);
 
   // Version gate first: anything newer than this build understands is rejected
@@ -184,13 +238,17 @@ vault::Serializator::deserialize(SecureString &&password,
     return std::unexpected(vault::VaultError::InvalidFormat);
 
   // v0 files were always written with the current KDF profile and authenticate
-  // only the salt/nonce header. v1 files declare their profile and algorithm
-  // identifiers, which are validated against the supported whitelist.
+  // only the salt/nonce header; the nonce length still selects the AEAD.
+  // v1/v2 files declare their profile and algorithm identifiers, which must be
+  // whitelisted and mutually consistent before any derivation happens.
   KdfProfile kdf = kCurrentKdfProfile;
   vault::VaultDescriptor descriptor{};
 
-  if (version != 0) {
-    if (proto.kdf().algorithm() != password_manager::KDF_ALGORITHM_ARGON2ID13 ||
+  if (version == 1) {
+    // v1 predates the cipher choice: only XChaCha20 with the original
+    // algorithm ids was ever written under this version.
+    if (!nonce_is_xchacha ||
+        proto.kdf().algorithm() != password_manager::KDF_ALGORITHM_ARGON2ID13 ||
         proto.salt_algorithm() != password_manager::SALT_ALGORITHM_ARGON2 ||
         proto.nonce_algorithm() !=
             password_manager::NONCE_ALGORITHM_XCHACHA20_POLY1305_IETF ||
@@ -216,24 +274,63 @@ vault::Serializator::deserialize(SecureString &&password,
         static_cast<std::uint32_t>(proto.nonce_algorithm());
     descriptor.cipher_algorithm =
         static_cast<std::uint32_t>(proto.cipher_algorithm());
+  } else if (version == 2) {
+    // v2: nonce_algorithm and cipher_algorithm must agree with each other and
+    // with the actual nonce length, so a file cannot claim one AEAD while
+    // supplying material for another.
+    const bool ids_match_nonce =
+        (proto.nonce_algorithm() ==
+             password_manager::NONCE_ALGORITHM_XCHACHA20_POLY1305_IETF &&
+         proto.cipher_algorithm() ==
+             password_manager::CIPHER_ALGORITHM_XCHACHA20_POLY1305_IETF &&
+         nonce_is_xchacha) ||
+        (proto.nonce_algorithm() ==
+             password_manager::NONCE_ALGORITHM_CHACHA20_POLY1305_IETF &&
+         proto.cipher_algorithm() ==
+             password_manager::CIPHER_ALGORITHM_CHACHA20_POLY1305_IETF &&
+         nonce_is_chacha);
+
+    if (proto.kdf().algorithm() != password_manager::KDF_ALGORITHM_ARGON2ID13 ||
+        proto.salt_algorithm() != password_manager::SALT_ALGORITHM_ARGON2 ||
+        !ids_match_nonce)
+      return std::unexpected(vault::VaultError::InvalidFormat);
+
+    kdf = KdfProfile{static_cast<std::size_t>(proto.kdf().ops_limit()),
+                     static_cast<std::size_t>(proto.kdf().mem_limit()),
+                     kPwhashAlgorithm};
+
+    if (!is_supported_kdf_profile(kdf))
+      return std::unexpected(vault::VaultError::InvalidFormat);
+
+    descriptor.version = version;
+    descriptor.kdf_algorithm =
+        static_cast<std::uint32_t>(proto.kdf().algorithm());
+    descriptor.kdf_ops_limit = proto.kdf().ops_limit();
+    descriptor.kdf_mem_limit = proto.kdf().mem_limit();
+    descriptor.salt_algorithm =
+        static_cast<std::uint32_t>(proto.salt_algorithm());
+    descriptor.nonce_algorithm =
+        static_cast<std::uint32_t>(proto.nonce_algorithm());
+    descriptor.cipher_algorithm =
+        static_cast<std::uint32_t>(proto.cipher_algorithm());
   }
 
-  Nonce nonce;
+  const Nonce nonce = nonce_from_bytes(proto.nonce(), nonce_is_xchacha);
+  const vault::CipherAlgorithm cipher =
+      nonce_is_xchacha ? vault::CipherAlgorithm::XChaCha20Poly1305
+                       : vault::CipherAlgorithm::ChaCha20Poly1305;
 
   Salt master_salt, meta_salt, ephemeral_salt;
   std::visit(
-      [&proto](auto &master_salt_v, auto &meta_salt_v, auto &ephemeral_salt_v,
-               auto &nonce_v) {
+      [&proto](auto &master_salt_v, auto &meta_salt_v, auto &ephemeral_salt_v) {
         std::memcpy(master_salt_v.data(), proto.master_salt().data(),
                     crypto_pwhash_SALTBYTES);
         std::memcpy(meta_salt_v.data(), proto.meta_salt().data(),
                     crypto_pwhash_SALTBYTES);
         std::memcpy(ephemeral_salt_v.data(), proto.ephemeral_salt().data(),
                     crypto_pwhash_SALTBYTES);
-        std::memcpy(nonce_v.data(), proto.nonce().data(),
-                    crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
       },
-      master_salt, meta_salt, ephemeral_salt, nonce);
+      master_salt, meta_salt, ephemeral_salt);
 
   vault::VaultKeys keys;
   try {
@@ -245,7 +342,7 @@ vault::Serializator::deserialize(SecureString &&password,
 
   const std::string &encrypted_entries = proto.entries();
 
-  if (encrypted_entries.size() < crypto_aead_xchacha20poly1305_ietf_ABYTES)
+  if (encrypted_entries.size() < aead_tag_bytes(nonce))
     return std::unexpected(vault::VaultError::VaultCorrupted);
 
   vault::VaultHeader header =
@@ -298,7 +395,9 @@ vault::Serializator::deserialize(SecureString &&password,
   seen_ids.reserve(entries.entries_size());
 
   for (const auto &e : entries.entries()) {
-    if (e.nonce().size() != crypto_aead_xchacha20poly1305_ietf_NPUBBYTES)
+    // Per-entry nonces must match the vault cipher: a mismatch would only fail
+    // later at authentication, but rejecting early keeps error reporting crisp.
+    if (e.nonce().size() != aead_nonce_bytes(nonce))
       return std::unexpected(vault::VaultError::VaultCorrupted);
 
     if (e.id().empty() || !seen_ids.insert(e.id()).second)
@@ -316,14 +415,7 @@ vault::Serializator::deserialize(SecureString &&password,
     entry.login = e.login();
     entry.notes = e.notes();
 
-    Nonce password_nonce;
-
-    std::visit(
-        [&e](auto &password_nonce_v) {
-          std::memcpy(password_nonce_v.data(), e.nonce().data(),
-                      password_nonce_v.size());
-        },
-        password_nonce);
+    const Nonce password_nonce = nonce_from_bytes(e.nonce(), nonce_is_xchacha);
 
     try {
       SecureString plaintext = CryptoService::decypher(
@@ -342,6 +434,7 @@ vault::Serializator::deserialize(SecureString &&password,
   vault.master_salt_ = master_salt;
   vault.ephemeral_salt_ = ephemeral_salt;
   vault.kdf_ = kdf;
+  vault.cipher_ = cipher;
   vault.test_magic_ciphertext = std::move(new_magic_ciphertext);
   vault.entries_ = std::move(temp_entries);
   vault.path_ = path;

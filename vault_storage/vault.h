@@ -49,6 +49,13 @@ public:
 
   bool locked() const noexcept { return locked_; }
 
+  // AEAD used when this vault is written. Set before the first save to pick
+  // the cipher; deserialize() sets it from the file so a re-save preserves
+  // whatever cipher the vault was loaded with.
+  [[nodiscard]] CipherAlgorithm cipher() const noexcept { return cipher_; }
+
+  void set_cipher(CipherAlgorithm cipher) noexcept { cipher_ = cipher; }
+
   void Init();
 
   Vault(Vault &&other) noexcept = default;
@@ -85,6 +92,7 @@ private:
   std::optional<EphemeralKey> session_key_;
   std::optional<VaultError> init_error_;
   KdfProfile kdf_ = kCurrentKdfProfile;
+  CipherAlgorithm cipher_ = CipherAlgorithm::XChaCha20Poly1305;
   bool locked_ = false;
   UnlockThrottle throttle_;
 

@@ -29,6 +29,16 @@ TEST_F(NonceTest, GenerateHasCorrectSize) {
       nonce);
 }
 
+TEST_F(NonceTest, GenerateChaCha20HasCorrectSize) {
+  const auto nonce = NonceManager::generate<ChaCha20Poly1305Nonce>();
+
+  ASSERT_EQ(nonce.index(), 1u);
+  EXPECT_EQ(aead_nonce_bytes(nonce),
+            crypto_aead_chacha20poly1305_ietf_NPUBBYTES);
+  EXPECT_EQ(aead_tag_bytes(nonce),
+            crypto_aead_chacha20poly1305_ietf_ABYTES);
+}
+
 TEST_F(NonceTest, GeneratedNonceIsNotAllZeroes) {
   const auto nonce = NonceManager::generate();
 

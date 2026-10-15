@@ -44,7 +44,7 @@ vault::VaultHeader vault::make_header(const Salt &meta_salt,
                                       const Salt &master_salt,
                                       const Salt &ephemeral_salt,
                                       const Nonce &nonce) {
-  VaultHeader header{};
+  VaultHeader header(crypto_pwhash_SALTBYTES * 3 + aead_nonce_bytes(nonce));
 
   auto out = header.begin();
 
@@ -63,7 +63,7 @@ vault::VaultHeader vault::make_header(const Salt &meta_salt,
 
 vault::VaultAad vault::make_aad(const VaultDescriptor &descriptor,
                                 const VaultHeader &header) {
-  VaultAad aad{};
+  VaultAad aad(kDescriptorBytes + header.size());
 
   std::byte *out = aad.data();
 

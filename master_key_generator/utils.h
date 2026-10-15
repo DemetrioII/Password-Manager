@@ -6,6 +6,7 @@
 #include <sodium.h>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <variant>
 
 #define MAX_VAULT_SIZE (1024ULL * 1024ULL * 8ULL)
@@ -59,7 +60,57 @@ using Salt = std::variant<Argon2Salt>;
 using XChaCha20Poly1305Nonce =
     std::array<std::byte, crypto_aead_xchacha20poly1305_ietf_NPUBBYTES>;
 
-using Nonce = std::variant<XChaCha20Poly1305Nonce>;
+using ChaCha20Poly1305Nonce =
+    std::array<std::byte, crypto_aead_chacha20poly1305_ietf_NPUBBYTES>;
+
+// The active alternative alone selects the AEAD primitive (and its nonce
+// length), so a nonce of one length can never be fed to the wrong function.
+using Nonce = std::variant<XChaCha20Poly1305Nonce, ChaCha20Poly1305Nonce>;
+
+// Per-nonce-type AEAD parameters and libsodium entry points. Both primitives
+// take the same argument shapes, so one template instantiation per nonce type
+// is enough to dispatch every call site.
+template <typename NonceT> struct AeadParams;
+
+template <> struct AeadParams<XChaCha20Poly1305Nonce> {
+  static constexpr std::size_t kNonceBytes =
+      crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
+  static constexpr std::size_t kTagBytes =
+      crypto_aead_xchacha20poly1305_ietf_ABYTES;
+  static constexpr auto encrypt = crypto_aead_xchacha20poly1305_ietf_encrypt;
+  static constexpr auto decrypt = crypto_aead_xchacha20poly1305_ietf_decrypt;
+};
+
+template <> struct AeadParams<ChaCha20Poly1305Nonce> {
+  static constexpr std::size_t kNonceBytes =
+      crypto_aead_chacha20poly1305_ietf_NPUBBYTES;
+  static constexpr std::size_t kTagBytes =
+      crypto_aead_chacha20poly1305_ietf_ABYTES;
+  static constexpr auto encrypt = crypto_aead_chacha20poly1305_ietf_encrypt;
+  static constexpr auto decrypt = crypto_aead_chacha20poly1305_ietf_decrypt;
+};
+
+// Both supported AEADs must share key and tag sizes: `Key`/`EphemeralKey` are
+// fixed 32-byte buffers and some buffers are sized from a single tag constant
+// before dispatching on the nonce type. Enforced here so a future primitive
+// swap cannot silently violate that assumption.
+static_assert(crypto_aead_chacha20poly1305_ietf_KEYBYTES ==
+              crypto_aead_xchacha20poly1305_ietf_KEYBYTES);
+static_assert(crypto_aead_chacha20poly1305_ietf_ABYTES ==
+              crypto_aead_xchacha20poly1305_ietf_ABYTES);
+
+// Tag/nonce sizes of the AEAD selected by the variant's active alternative.
+inline std::size_t aead_tag_bytes(const Nonce &nonce) {
+  return std::visit(
+      [](const auto &value) {
+        return AeadParams<std::decay_t<decltype(value)>>::kTagBytes;
+      },
+      nonce);
+}
+
+inline std::size_t aead_nonce_bytes(const Nonce &nonce) {
+  return std::visit([](const auto &value) { return value.size(); }, nonce);
+}
 
 class CryptoError : public std::runtime_error {
 public:

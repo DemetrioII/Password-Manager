@@ -25,6 +25,7 @@ enum KdfAlgorithm {
 enum CipherAlgorithm {
   CIPHER_ALGORITHM_UNSPECIFIED = 0;
   CIPHER_ALGORITHM_XCHACHA20_POLY1305_IETF = 1;
+  CIPHER_ALGORITHM_CHACHA20_POLY1305_IETF = 2;
 }
 
 // Salt type identifiers
@@ -37,6 +38,7 @@ enum SaltAlgorithm {
 enum NonceAlgorithm {
   NONCE_ALGORITHM_UNSPECIFIED = 0;
   NONCE_ALGORITHM_XCHACHA20_POLY1305_IETF = 1;
+  NONCE_ALGORITHM_CHACHA20_POLY1305_IETF = 2;
 }
 
 // KDF parameters used for deriving keys from the master password

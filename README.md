@@ -16,10 +16,10 @@ A password manager written in **modern C++** with a strong focus on security, cr
 ## ✨ Features
 
 * 🔒 **Encrypted password vault** with an explicit lock / unlock workflow
-* 🏷️ **Versioned on-disk format (v1)** — vault files carry their version, KDF parameters and algorithm identifiers, and legacy files are still readable
+* 🏷️ **Versioned on-disk format (v2)** — vault files carry their version, KDF parameters and algorithm identifiers, and legacy **v0/v1** files are still readable
 * 🧂 **Three independent salts** (metadata, master key, session) and three separate keys
 * 🔑 Master-key derivation using **Argon2id**, with the declared profile validated against an allow-list *before* any derivation
-* 🔐 **XChaCha20-Poly1305** authenticated encryption (both per-entry and vault level)
+* 🔐 Selectable **authenticated encryption** — **XChaCha20-Poly1305** (default) or **ChaCha20-Poly1305**, both at per-entry and vault level, with the cipher dispatched from the nonce type
 * 🎲 Cryptographically secure random nonces, freshly generated per operation
 * 🧬 **AAD** binds the version, KDF parameters and algorithm ids to the vault ciphertext, so tampering and version downgrades are detected
 * ♻️ **Rekeying** — change the master password and re-encrypt every entry (`Vault::SetPassword`)
@@ -52,7 +52,7 @@ The project is divided into several relatively independent components:
                     │    Vault Storage    │◄───────│ Password Generator │
                     │  Lock / Unlock      │        └────────────────────┘
                     │  Entries / Rekey    │
-                    │  Serialization v1   │
+                    │  Serialization v2   │
                     │  Atomic writes      │
                     └───┬─────────┬───────┘
                         │         │
@@ -61,8 +61,9 @@ The project is divided into several relatively independent components:
   ┌──────────────────┐               ┌──────────────────────┐
   │  Crypto Service  │               │  Master Key / KDF    │
   │                  │               │                      │
-  │  XChaCha20-      │               │  Argon2id            │
-  │  Poly1305        │               │  Key / SecureString  │
+  │  XChaCha20- /    │               │  Argon2id            │
+  │  ChaCha20-       │               │  Key / SecureString  │
+  │  Poly1305        │               │                      │
   └──────────────────┘               └──────────────────────┘
 
   ┌──────────────────────────────────────────────────────────┐
@@ -134,10 +135,12 @@ Serialize entries with Protocol Buffers
 Encrypt serialized entries under meta key ──► vault nonce
       │
       ▼
-Encrypted vault file (v1)
+Encrypted vault file (v2)
 ```
 
-The vault-level encryption uses **XChaCha20-Poly1305** with the version/KDF/algorithm descriptor bound as **AAD**; individual passwords are encrypted separately under the master key. Nonces are generated independently for every encryption operation.
+The vault-level encryption uses **XChaCha20-Poly1305** or **ChaCha20-Poly1305** with the version/KDF/algorithm descriptor bound as **AAD**; individual passwords are encrypted separately under the master key. Nonces are generated independently for every encryption operation.
+
+The cipher used when writing is a vault-wide setting (`Vault::set_cipher()`, default **XChaCha20-Poly1305**). The same cipher applies to every per-entry and vault-level nonce in the file, and the reader selects it from the stored nonce length / algorithm ids — so each vault is written and read with one consistent cipher.
 
 ## 🔐 Cryptography
 
@@ -149,7 +152,7 @@ Current cryptographic building blocks include:
 | ------------------------------ | ---------------------------- |
 | Password-based key derivation  | Argon2id (`crypto_pwhash`)   |
 | Key separation                 | `crypto_kdf_derive_from_key` |
-| Entry & vault encryption       | XChaCha20-Poly1305 (IETF)    |
+| Entry & vault encryption       | XChaCha20-Poly1305 or ChaCha20-Poly1305 (IETF) |
 | Random data                    | libsodium CSPRNG             |
 | Secret comparison              | constant-time `sodium_memcmp`|
 | Per-entry / vault nonces       | Randomly generated           |
@@ -163,9 +166,9 @@ The project deliberately avoids implementing cryptographic primitives from scrat
 
 Cryptography is an area where "I can implement AES" is very different from "I can implement AES securely". Using a well-established cryptographic library greatly reduces the amount of security-critical code that has to be written and maintained.
 
-## 📦 Data format (v1)
+## 📦 Data format (v2)
 
-The vault is serialized using **Protocol Buffers** and written as a **versioned v1** descriptor.
+The vault is serialized using **Protocol Buffers** and written as a **versioned v2** descriptor.
 
 The encrypted file contains the information necessary to derive the keys and decrypt the vault, including:
 
@@ -179,13 +182,15 @@ The actual password contents remain encrypted. Binary cryptographic material is 
 
 ### AAD binding
 
-Version, KDF parameters and algorithm ids are packed together with the salts and nonce into a canonical **little-endian AAD** (a fixed byte layout — an on-disk contract). Any change to it, or a version downgrade, is detected as a `CryptoError`.
+Version, KDF parameters and algorithm ids are packed together with the salts and nonce into a canonical **little-endian AAD** (a fixed 36-byte descriptor layout — an on-disk contract — followed by the salt/nonce header). Any change to it, or a version downgrade, is detected as a `CryptoError`.
 
 ### Compatibility
 
 * Declared KDF parameters are validated against a **supported-profile allow-list** before derivation, so a malicious file cannot force unbounded memory or CPU usage.
 * Files without a version field are treated as **legacy v0**, read with the old header-only AAD.
-* Unknown or unsupported algorithms / KDF parameters and future versions are rejected as `InvalidFormat`.
+* **v1** files (XChaCha20-Poly1305, fixed 24-byte nonce header) remain fully readable.
+* **v2** files declare their cipher via the nonce/cipher algorithm ids; the reader derives the AEAD from the stored nonce length (12 bytes → ChaCha20-Poly1305, 24 bytes → XChaCha20-Poly1305), so a nonce can never be fed to the wrong primitive.
+* Unknown or unsupported algorithms / KDF parameters, mismatched cipher/nonce ids, and future versions are rejected as `InvalidFormat` (malformed sizes as `VaultCorrupted`).
 
 ## 🛡️ Hardening
 
@@ -210,12 +215,12 @@ Security is treated as a whole-system property, not just a crypto problem:
 │   ├── dark.qss            # Dark theme
 │   └── BUILD
 │
-├── crypto_service/         # XChaCha20-Poly1305 wrappers over libsodium
+├── crypto_service/         # XChaCha20-/ChaCha20-Poly1305 wrappers over libsodium
 │
 ├── master_key_generator/   # Argon2id KDF, Key / SecureString / EphemeralKey,
 │                           # EncryptedField, salts & nonce managers
 │
-├── vault_storage/          # Vault, serialization (v1), model & AAD,
+├── vault_storage/          # Vault, serialization (v2), model & AAD,
 │   ├── proto/              #   atomic safe writer, unlock throttle
 │   │   └── vault.proto     # Vault protobuf schema
 │   └── tests/              # Vault / serializer / model / throttle tests
@@ -316,6 +321,7 @@ The project is still evolving. Planned areas include:
 **Done**
 
 * [x] Vault format **v1** — versioned files, KDF parameters, algorithm ids, descriptor-bound AAD, legacy v0 migration
+* [x] Vault format **v2** — selectable cipher (**XChaCha20-Poly1305** or **ChaCha20-Poly1305**), variable-length nonce header, v0/v1 compatibility
 * [x] Separate salts and keys for metadata, master key and session
 * [x] Secure memory handling (`mlock`, guard pages, wipes)
 * [x] Process hardening (non-dumpable, `mlockall`, no core dumps)
@@ -329,6 +335,7 @@ The project is still evolving. Planned areas include:
 **Next**
 
 * [ ] Auto-lock on idle / suspend
+* [ ] UI for selecting the vault cipher (currently C++ API only)
 * [ ] UI for rekeying and editing notes
 * [ ] Non-blocking unlock (Argon2 currently blocks the event loop)
 * [ ] `.bak` backup and self-check on load

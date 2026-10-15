@@ -23,6 +23,10 @@ Key make_wrong_key() {
 
 Nonce make_nonce() { return NonceManager::generate(); }
 
+Nonce make_chacha_nonce() {
+  return NonceManager::generate<ChaCha20Poly1305Nonce>();
+}
+
 } // namespace
 
 TEST(CryptoService, EncryptDecryptRoundTrip) {
@@ -274,6 +278,79 @@ TEST(CryptoService, VectorDecryptTooShortCiphertextIsRejected) {
   EXPECT_THROW(CryptoService::decrypt(ciphertext.data(), ciphertext.size(),
                                       nullptr, 0, nonce, key),
                InvalidCiphertext);
+}
+
+TEST(CryptoService, ChaCha20Poly1305RoundTrip) {
+  auto plaintext = make_secret("super secret password");
+  auto key = make_key();
+  auto nonce = make_chacha_nonce();
+
+  auto ciphertext = CryptoService::cypher(plaintext, nonce, key);
+
+  EXPECT_EQ(ciphertext.size(),
+            plaintext.size() + crypto_aead_chacha20poly1305_ietf_ABYTES);
+
+  auto decrypted = CryptoService::decypher(ciphertext, nonce, key);
+
+  EXPECT_EQ(decrypted.view(), plaintext.view());
+}
+
+TEST(CryptoService, ChaCha20Poly1305WrongNonceFailsAuthentication) {
+  auto plaintext = make_secret("secret");
+  auto key = make_key();
+  auto nonce = make_chacha_nonce();
+  auto wrong_nonce = make_chacha_nonce();
+
+  auto ciphertext = CryptoService::cypher(plaintext, nonce, key);
+
+  EXPECT_THROW(CryptoService::decypher(ciphertext, wrong_nonce, key),
+               AuthenticationFailed);
+}
+
+TEST(CryptoService, ChaCha20Poly1305VectorRoundTripWithAad) {
+  auto key = make_key();
+  auto nonce = make_chacha_nonce();
+
+  const std::string plaintext = "super secret password";
+  const std::string aad = "vault-header";
+
+  const auto *aad_bytes = reinterpret_cast<const std::byte *>(aad.data());
+
+  auto ciphertext =
+      CryptoService::encrypt(plaintext.data(), plaintext.size(), aad_bytes,
+                             aad.size(), nonce, key);
+
+  EXPECT_EQ(ciphertext.size(),
+            plaintext.size() + crypto_aead_chacha20poly1305_ietf_ABYTES);
+
+  auto decrypted = CryptoService::decrypt(
+      reinterpret_cast<const char *>(ciphertext.data()), ciphertext.size(),
+      aad_bytes, aad.size(), nonce, key);
+
+  EXPECT_EQ(decrypted, plaintext);
+}
+
+TEST(CryptoService, ChaCha20Poly1305VectorWrongAadFailsAuthentication) {
+  auto key = make_key();
+  auto nonce = make_chacha_nonce();
+
+  const std::string plaintext = "super secret password";
+  const std::string aad = "vault-header";
+  const std::string wrong_aad = "vault-headeR";
+
+  const auto *aad_bytes = reinterpret_cast<const std::byte *>(aad.data());
+  const auto *wrong_aad_bytes =
+      reinterpret_cast<const std::byte *>(wrong_aad.data());
+
+  auto ciphertext =
+      CryptoService::encrypt(plaintext.data(), plaintext.size(), aad_bytes,
+                             aad.size(), nonce, key);
+
+  EXPECT_THROW(CryptoService::decrypt(
+                   reinterpret_cast<const char *>(ciphertext.data()),
+                   ciphertext.size(), wrong_aad_bytes, wrong_aad.size(), nonce,
+                   key),
+               AuthenticationFailed);
 }
 
 int main(int argc, char **argv) {

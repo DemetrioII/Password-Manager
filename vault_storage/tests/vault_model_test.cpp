@@ -174,6 +174,27 @@ TEST_F(VaultModelTest, MakeHeaderChangesWhenNonceChanges) {
   EXPECT_NE(header1, header2);
 }
 
+TEST_F(VaultModelTest, MakeHeaderSizeDependsOnNonceType) {
+  Salt meta_salt{};
+  Salt master_salt{};
+  Salt ephemeral_salt{};
+
+  Nonce xchacha_nonce = NonceManager::generate<XChaCha20Poly1305Nonce>();
+  Nonce chacha_nonce = NonceManager::generate<ChaCha20Poly1305Nonce>();
+
+  const auto xchacha_header =
+      vault::make_header(meta_salt, master_salt, ephemeral_salt, xchacha_nonce);
+  const auto chacha_header =
+      vault::make_header(meta_salt, master_salt, ephemeral_salt, chacha_nonce);
+
+  EXPECT_EQ(xchacha_header.size(),
+            crypto_pwhash_SALTBYTES * 3 +
+                crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+  EXPECT_EQ(chacha_header.size(),
+            crypto_pwhash_SALTBYTES * 3 +
+                crypto_aead_chacha20poly1305_ietf_NPUBBYTES);
+}
+
 TEST_F(VaultModelTest, DeriveKeysProducesKeysOfCorrectSize) {
   const Salt meta_salt = SaltManager::generateSalt<Argon2Salt>();
   const Salt master_salt = SaltManager::generateSalt<Argon2Salt>();
@@ -261,7 +282,8 @@ TEST_F(VaultModelTest, DifferentMasterSaltsProduceDifferentMasterKeys) {
 
 TEST_F(VaultModelTest, MakeAadIsDeterministic) {
   const vault::VaultDescriptor descriptor{};
-  vault::VaultHeader header{};
+  vault::VaultHeader header(crypto_pwhash_SALTBYTES * 3 +
+                            crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
 
   std::ranges::fill(header, std::byte{0x42});
 
@@ -271,7 +293,8 @@ TEST_F(VaultModelTest, MakeAadIsDeterministic) {
 
 TEST_F(VaultModelTest, MakeAadEndsWithHeader) {
   const vault::VaultDescriptor descriptor{};
-  vault::VaultHeader header{};
+  vault::VaultHeader header(crypto_pwhash_SALTBYTES * 3 +
+                            crypto_aead_chacha20poly1305_ietf_NPUBBYTES);
 
   std::ranges::fill(header, std::byte{0x42});
 
@@ -289,7 +312,8 @@ TEST_F(VaultModelTest, MakeAadChangesWhenVersionChanges) {
   vault::VaultDescriptor second{};
   second.version = first.version + 1;
 
-  vault::VaultHeader header{};
+  vault::VaultHeader header(crypto_pwhash_SALTBYTES * 3 +
+                            crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
 
   EXPECT_NE(vault::make_aad(first, header), vault::make_aad(second, header));
 }
@@ -299,7 +323,8 @@ TEST_F(VaultModelTest, MakeAadChangesWhenKdfParamsChange) {
   vault::VaultDescriptor second{};
   second.kdf_ops_limit = first.kdf_ops_limit + 1;
 
-  vault::VaultHeader header{};
+  vault::VaultHeader header(crypto_pwhash_SALTBYTES * 3 +
+                            crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
 
   EXPECT_NE(vault::make_aad(first, header), vault::make_aad(second, header));
 }
@@ -309,7 +334,8 @@ TEST_F(VaultModelTest, MakeAadChangesWhenAlgorithmIdsChange) {
   vault::VaultDescriptor second{};
   second.cipher_algorithm = first.cipher_algorithm + 1;
 
-  vault::VaultHeader header{};
+  vault::VaultHeader header(crypto_pwhash_SALTBYTES * 3 +
+                            crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
 
   EXPECT_NE(vault::make_aad(first, header), vault::make_aad(second, header));
 }

@@ -127,4 +127,19 @@ TEST(UnlockThrottle, DefaultSleeperRunsWithoutThrowing) {
   EXPECT_NO_THROW(throttle.RecordFailure());
 }
 
+TEST(UnlockThrottle, BaseZeroLargeAttemptBounded) {
+  const auto config = ConfigWith(std::chrono::milliseconds::zero(),
+                                 std::chrono::milliseconds::zero());
+
+  DelayLog log;
+  UnlockThrottle throttle(
+      config, [&log](std::chrono::milliseconds d) { log.delays.push_back(d); });
+
+  for (std::uint32_t i = 0; i < 1000; ++i) {
+    throttle.RecordFailure();
+  }
+
+  EXPECT_TRUE(log.delays.empty());
+}
+
 } // namespace

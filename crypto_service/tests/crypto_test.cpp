@@ -219,6 +219,63 @@ TEST(CryptoService, UnicodeRoundTrip) {
   EXPECT_EQ(decrypted.view(), plaintext.view());
 }
 
+TEST(CryptoService, VectorEncryptDecryptRoundTrip) {
+  auto key = make_key();
+  auto nonce = make_nonce();
+
+  const std::string plaintext = "super secret password";
+  const std::string aad = "vault-header";
+
+  const auto *aad_bytes = reinterpret_cast<const std::byte *>(aad.data());
+
+  auto ciphertext =
+      CryptoService::encrypt(plaintext.data(), plaintext.size(), aad_bytes,
+                             aad.size(), nonce, key);
+
+  EXPECT_EQ(ciphertext.size(),
+            plaintext.size() + crypto_aead_xchacha20poly1305_ietf_ABYTES);
+
+  auto decrypted = CryptoService::decrypt(
+      reinterpret_cast<const char *>(ciphertext.data()), ciphertext.size(),
+      aad_bytes, aad.size(), nonce, key);
+
+  EXPECT_EQ(decrypted, plaintext);
+}
+
+TEST(CryptoService, VectorDecryptWrongAadFailsAuthentication) {
+  auto key = make_key();
+  auto nonce = make_nonce();
+
+  const std::string plaintext = "super secret password";
+  const std::string aad = "vault-header";
+  const std::string wrong_aad = "vault-headeR";
+
+  const auto *aad_bytes = reinterpret_cast<const std::byte *>(aad.data());
+  const auto *wrong_aad_bytes =
+      reinterpret_cast<const std::byte *>(wrong_aad.data());
+
+  auto ciphertext =
+      CryptoService::encrypt(plaintext.data(), plaintext.size(), aad_bytes,
+                             aad.size(), nonce, key);
+
+  EXPECT_THROW(CryptoService::decrypt(
+                   reinterpret_cast<const char *>(ciphertext.data()),
+                   ciphertext.size(), wrong_aad_bytes, wrong_aad.size(), nonce,
+                   key),
+               AuthenticationFailed);
+}
+
+TEST(CryptoService, VectorDecryptTooShortCiphertextIsRejected) {
+  auto key = make_key();
+  auto nonce = make_nonce();
+
+  std::array<char, crypto_aead_xchacha20poly1305_ietf_ABYTES - 1> ciphertext{};
+
+  EXPECT_THROW(CryptoService::decrypt(ciphertext.data(), ciphertext.size(),
+                                      nullptr, 0, nonce, key),
+               InvalidCiphertext);
+}
+
 int main(int argc, char **argv) {
   if (sodium_init() < 0)
     return 1;

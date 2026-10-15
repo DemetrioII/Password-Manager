@@ -22,6 +22,11 @@ SecureString CryptoService::cypher(const SecureString &password,
         },
         nonce);
   });
+
+  if (ciphertext_size != ciphertext.size())
+    throw CryptoError(
+        "XChaCha20-Poly1305 encryption produced unexpected size");
+
   return ciphertext;
 }
 
@@ -54,6 +59,10 @@ SecureString CryptoService::decypher(const SecureString &ciphertext,
         },
         nonce);
   });
+
+  if (plain_text_size != password.size())
+    throw CryptoError("Unknown error during the decryption");
+
   return password;
 }
 
@@ -120,5 +129,10 @@ std::string CryptoService::decrypt(const char *ciphertext,
               "XChaCha20-Poly1305 authentication failed");
       },
       nonce);
+
+  if (plain_text_size != plaintext.size())
+    throw CryptoError(
+        "XChaCha20-Poly1305 decryption produced unexpected size");
+
   return plaintext;
 }

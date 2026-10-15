@@ -8,7 +8,7 @@
 class EphemeralKey {
 public:
   EphemeralKey();
-  EphemeralKey(SecureString &&, const Argon2Salt &,
+  EphemeralKey(const SecureString &password, const Argon2Salt &salt,
                const KdfProfile &kdf = kCurrentKdfProfile);
 
   ~EphemeralKey() noexcept;

@@ -21,7 +21,9 @@ void vault::UnlockThrottle::RecordFailure() {
   }
 
   auto delay = config_.base;
-  for (std::uint32_t steps = attempt; steps > 0 && delay < config_.cap;
+  const std::uint32_t max_steps = 64;
+  const std::uint32_t steps_to_take = std::min(attempt, max_steps);
+  for (std::uint32_t steps = steps_to_take; steps > 0 && delay < config_.cap;
        --steps) {
     delay = std::min(config_.cap, delay * 2);
   }

@@ -20,3 +20,12 @@ external/
 PLAN.md 
 AGENTS.md 
 *.nonce
+
+# leftover junk in repo root (see AGENTS.md Repo hygiene)
+.opencode/
+huhuku
+aboba
+tags
+n
+name
+vault

@@ -140,7 +140,7 @@ Encrypted vault file (v2)
 
 The vault-level encryption uses **XChaCha20-Poly1305** or **ChaCha20-Poly1305** with the version/KDF/algorithm descriptor bound as **AAD**; individual passwords are encrypted separately under the master key. Nonces are generated independently for every encryption operation.
 
-The cipher used when writing is a vault-wide setting (`Vault::set_cipher()`, default **XChaCha20-Poly1305**). The same cipher applies to every per-entry and vault-level nonce in the file, and the reader selects it from the stored nonce length / algorithm ids — so each vault is written and read with one consistent cipher.
+The cipher used when writing is a vault-wide setting (`Vault::set_cipher()`, default **XChaCha20-Poly1305**). It is picked in the creation dialog and shown read-only in the main window, where the loader has taken it from the open file. The same cipher applies to every per-entry and vault-level nonce in the file, and the reader selects it from the stored nonce length / algorithm ids — so each vault is written and read with one consistent cipher.
 
 ## 🔐 Cryptography
 
@@ -330,12 +330,12 @@ The project is still evolving. Planned areas include:
 * [x] Consistent write/read size limits
 * [x] Password generator
 * [x] Qt startup flow, real unlock dialog, clipboard hygiene
+* [x] Vault cipher selection in the creation dialog, with the cipher of the open file shown in the main window
 * [x] Atomic, owner-only file writes
 
 **Next**
 
 * [ ] Auto-lock on idle / suspend
-* [ ] UI for selecting the vault cipher (currently C++ API only)
 * [ ] UI for rekeying and editing notes
 * [ ] Non-blocking unlock (Argon2 currently blocks the event loop)
 * [ ] `.bak` backup and self-check on load

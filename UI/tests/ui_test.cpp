@@ -10,13 +10,16 @@
 // plain boolean, and the two places where contents matter go through view()
 // rather than operator== so a failure cannot dump the plaintext into the log.
 
+#include "UI/forms/cipher_names.hpp"
 #include "UI/forms/lock_form.hpp"
+#include "UI/forms/master_form.hpp"
 #include "UI/forms/password_form.hpp"
 #include "master_key_generator/securestring.h"
 #include "password_generator/pass_gen.h"
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -296,4 +299,103 @@ TEST(LockForm, TakeSecurePasswordMatchesTheInputAndScrubsTheField) {
   const std::string expected = typed.toStdString();
   EXPECT_TRUE(taken.view() == std::string_view{expected});
   EXPECT_TRUE(password_field->text().isEmpty());
+}
+
+// --- MasterForm -------------------------------------------------------------
+
+// Row order of the cipher picker. XChaCha20-Poly1305 is the default, so it is
+// the row a freshly shown dialog sits on; the other tests address items through
+// their algorithm id instead of this number.
+constexpr int kXChaChaRow = 0;
+constexpr int kChaChaRow = 1;
+
+QComboBox *cipherBoxOf(QDialog &dialog) {
+  return dialog.findChild<QComboBox *>("cipherBox");
+}
+
+TEST(MasterForm, OffersBothVaultCiphersAndDefaultsToXChaCha20) {
+  MasterForm form;
+  auto *cipher_box = cipherBoxOf(form);
+  ASSERT_NE(cipher_box, nullptr);
+  ASSERT_EQ(cipher_box->count(), 2);
+
+  EXPECT_EQ(cipher_box->currentIndex(), kXChaChaRow);
+  EXPECT_EQ(form.cipher(), vault::CipherAlgorithm::XChaCha20Poly1305);
+}
+
+TEST(MasterForm, PickerItemsCarryTheCipherIdAndTheSharedName) {
+  MasterForm form;
+  auto *cipher_box = cipherBoxOf(form);
+  ASSERT_NE(cipher_box, nullptr);
+  ASSERT_EQ(cipher_box->count(), 2);
+
+  EXPECT_EQ(cipher_box->itemData(kXChaChaRow).toInt(),
+            static_cast<int>(vault::CipherAlgorithm::XChaCha20Poly1305));
+  EXPECT_EQ(cipher_box->itemData(kChaChaRow).toInt(),
+            static_cast<int>(vault::CipherAlgorithm::ChaCha20Poly1305));
+
+  // The labels are built from cipherDisplayName(), which the main window shows
+  // the loaded cipher with, so only the recommendation suffix is local.
+  EXPECT_TRUE(
+      cipher_box->itemText(kXChaChaRow)
+          .startsWith(cipherDisplayName(
+              vault::CipherAlgorithm::XChaCha20Poly1305)));
+  EXPECT_EQ(cipher_box->itemText(kChaChaRow),
+            cipherDisplayName(vault::CipherAlgorithm::ChaCha20Poly1305));
+}
+
+TEST(MasterForm, ChoosingChaCha20IsWhatTheStartupFlowReadsBack) {
+  MasterForm form;
+  auto *cipher_box = cipherBoxOf(form);
+  ASSERT_NE(cipher_box, nullptr);
+
+  cipher_box->setCurrentIndex(cipher_box->findData(
+      static_cast<int>(vault::CipherAlgorithm::ChaCha20Poly1305)));
+  ASSERT_NE(cipher_box->currentIndex(), -1);
+
+  EXPECT_EQ(form.cipher(), vault::CipherAlgorithm::ChaCha20Poly1305);
+}
+
+TEST(MasterForm, SelectCipherRestoresTheChoiceAcrossARetriedCreation) {
+  MasterForm form;
+
+  form.selectCipher(vault::CipherAlgorithm::ChaCha20Poly1305);
+  EXPECT_EQ(form.cipher(), vault::CipherAlgorithm::ChaCha20Poly1305);
+
+  form.selectCipher(vault::CipherAlgorithm::XChaCha20Poly1305);
+  EXPECT_EQ(form.cipher(), vault::CipherAlgorithm::XChaCha20Poly1305);
+}
+
+TEST(MasterForm, AcceptingKeepsTheCipherAndHandsOverThePassword) {
+  MasterForm form;
+  auto *password_field = form.findChild<QLineEdit *>("passwordEdit");
+  auto *confirm_field = form.findChild<QLineEdit *>("confirmEdit");
+  auto *cipher_box = cipherBoxOf(form);
+  auto *buttons = form.findChild<QDialogButtonBox *>();
+  ASSERT_NE(password_field, nullptr);
+  ASSERT_NE(confirm_field, nullptr);
+  ASSERT_NE(cipher_box, nullptr);
+  ASSERT_NE(buttons, nullptr);
+
+  cipher_box->setCurrentIndex(kChaChaRow);
+
+  // Both fields have to match, otherwise accept() opens a modal warning box
+  // and the test would hang instead of failing.
+  const QString typed = QStringLiteral("a-long-enough-master-password");
+  QTest::keyClicks(password_field, typed);
+  QTest::keyClicks(confirm_field, typed);
+
+  auto *ok = buttons->button(QDialogButtonBox::Ok);
+  ASSERT_NE(ok, nullptr);
+  ok->click();
+  ASSERT_EQ(form.result(), QDialog::Accepted);
+
+  // The startup flow reads the cipher after the dialog closes and hands the
+  // password over separately; neither step may disturb the other.
+  EXPECT_EQ(form.cipher(), vault::CipherAlgorithm::ChaCha20Poly1305);
+
+  SecureString taken = form.takeSecurePassword();
+  EXPECT_EQ(taken.size(), static_cast<std::size_t>(typed.size()));
+  EXPECT_TRUE(password_field->text().isEmpty());
+  EXPECT_TRUE(confirm_field->text().isEmpty());
 }

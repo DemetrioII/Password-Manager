@@ -37,6 +37,7 @@ qt_cc_library(
 				"lock_form.cpp",
 				"master_form.cpp",
 				"start_form.cpp"],
+	hdrs = ["cipher_names.hpp"],
 	copts = [
 		"-std=c++23",
 	],

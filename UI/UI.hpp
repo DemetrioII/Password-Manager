@@ -86,6 +86,12 @@ public:
 
   void setVaultPath(std::string path);
 
+  // AEAD this vault is (or would be) written with. The core reads it back from
+  // the file header on load, so after an open it is what is actually on disk.
+  [[nodiscard]] vault::CipherAlgorithm cipher() const noexcept {
+    return vault_.cipher();
+  }
+
   // Called by a card after it put a password into the clipboard. Records the
   // secret by fingerprint (never by value) and arms the auto-clear timer.
   void noteClipboardCopy(const QString &secret);
@@ -96,8 +102,13 @@ public:
 private:
   PasswordItemWidget *currentWidget() const;
 
+  // Re-reads the cipher from the vault after anything that can replace it:
+  // construction, a load from disk and a reload-based unlock.
+  void refreshCipherIndicator();
+
   QListWidget *passwords_;
   QLineEdit *search_;
+  QLabel *cipherLabel_;
 
   bool locked_{false};
   vault::Vault vault_;

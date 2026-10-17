@@ -1,4 +1,5 @@
 #include "UI.hpp"
+#include "UI/forms/cipher_names.hpp"
 #include "UI/forms/load_form.hpp"
 #include "UI/forms/lock_form.hpp"
 #include "UI/forms/password_form.hpp"
@@ -190,6 +191,13 @@ MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
 
   statusBar()->showMessage("Ready");
 
+  // The cipher of the open file is not switchable from here (changing it means
+  // rewriting every entry with fresh nonces), so it is shown, not offered.
+  cipherLabel_ = new QLabel;
+  cipherLabel_->setObjectName("cipherLabel");
+  statusBar()->addPermanentWidget(cipherLabel_);
+  refreshCipherIndicator();
+
   auto *toolbar = addToolBar("Main");
 
   auto *addAction = toolbar->addAction("+");
@@ -339,6 +347,8 @@ MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
     vaultPath_ = name;
     locked_ = false;
     clearClipboardIfOwned();
+    // deserialize() took the cipher from the file we just opened.
+    refreshCipherIndicator();
     refreshPasswordList();
     QMessageBox::information(this, "Success", "Deserialization was successful");
   });
@@ -412,8 +422,16 @@ bool MainWindow::unlock(SecureString &&password) {
     return false;
 
   locked_ = false;
+  // A reload-based unlock re-reads the header, so the cipher is re-checked here
+  // too instead of trusting the value from the construction time.
+  refreshCipherIndicator();
   refreshPasswordList();
   return true;
+}
+
+void MainWindow::refreshCipherIndicator() {
+  cipherLabel_->setText(
+      tr("Cipher: %1").arg(cipherDisplayName(vault_.cipher())));
 }
 
 void MainWindow::lock() {

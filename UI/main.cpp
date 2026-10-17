@@ -67,10 +67,18 @@ std::optional<PreparedVault> createNewVault() {
   if (!path)
     return std::nullopt;
 
+  // Kept outside the retry loop so a failed save re-offers the cipher the user
+  // picked instead of quietly reverting to the default.
+  vault::CipherAlgorithm cipher = vault::CipherAlgorithm::XChaCha20Poly1305;
+
   while (true) {
     MasterForm form;
+    form.selectCipher(cipher);
+
     if (form.exec() != QDialog::Accepted)
       return std::nullopt;
+
+    cipher = form.cipher();
 
     // Vault() and the serializer only read the password (they bind it to
     // SecureString&& without taking ownership), so the same buffer serves both
@@ -80,6 +88,9 @@ std::optional<PreparedVault> createNewVault() {
     const WaitCursor busy;
     vault::Vault vault(std::move(password));
     vault.Init();
+    // Before the serializer ever sees the vault: the cipher picks the AEAD and
+    // the nonce length that both get written into the file header.
+    vault.set_cipher(cipher);
 
     const auto saved = vault::service::save(std::move(password), *path, vault);
     if (!saved) {

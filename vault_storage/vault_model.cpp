@@ -11,7 +11,7 @@ void append_little_endian(std::byte *&out, UInt value) {
 
 } // namespace
 
-vault::VaultKeys vault::derive_keys_from_password(SecureString &&password,
+vault::VaultKeys vault::derive_keys_from_password(const SecureString &password,
                                                   const Salt &salt_meta,
                                                   const Salt &salt_pass,
                                                   const KdfProfile &kdf) {

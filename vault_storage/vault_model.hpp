@@ -150,7 +150,9 @@ using VaultAad = std::vector<std::byte>;
 // header (v0 authenticates the header alone, see Serializator::deserialize).
 VaultAad make_aad(const VaultDescriptor &descriptor, const VaultHeader &header);
 
-VaultKeys derive_keys_from_password(SecureString &&password,
+// Non-destructive: the password is only read, so a caller that may need to
+// retry (e.g. the `.bak` recovery path) keeps a usable handle afterwards.
+VaultKeys derive_keys_from_password(const SecureString &password,
                                     const Salt &salt_meta,
                                     const Salt &salt_pass,
                                     const KdfProfile &kdf = kCurrentKdfProfile);

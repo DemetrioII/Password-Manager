@@ -1,5 +1,6 @@
 #include "vault_storage/vault_serializer.h"
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -209,11 +210,23 @@ protected:
 
     std::error_code ec;
     std::filesystem::remove(path_, ec);
+    std::filesystem::remove(backup_path(), ec);
+    std::filesystem::remove(staging_backup_path(), ec);
   }
 
   void TearDown() override {
     std::error_code ec;
     std::filesystem::remove(path_, ec);
+    std::filesystem::remove(backup_path(), ec);
+    std::filesystem::remove(staging_backup_path(), ec);
+  }
+
+  std::filesystem::path backup_path() const {
+    return path_.string() + std::string(vault::kVaultBackupSuffix);
+  }
+
+  std::filesystem::path staging_backup_path() const {
+    return backup_path().string() + ".tmp." + std::to_string(getpid());
   }
 
   std::filesystem::path path_;
@@ -1347,4 +1360,160 @@ TEST_F(VaultSerializerTest, PasswordAtLimitFitsSizeLimitAndRoundTrips) {
                                                path_.string(), restored));
   ASSERT_EQ(restored.Entries().size(), 1u);
 }
+
+// -----------------------------------------------------------------------------
+// `.bak` backup and crash-state recovery
+// -----------------------------------------------------------------------------
+
+std::string read_file_bytes(const std::filesystem::path &path) {
+  std::ifstream file(path, std::ios::binary);
+  return std::string((std::istreambuf_iterator<char>(file)),
+                     std::istreambuf_iterator<char>());
+}
+
+vault::Vault vault_with_throttle_disabled(SecureString &&password) {
+  const vault::UnlockThrottle::Config disabled{
+      std::chrono::milliseconds::zero(), std::chrono::milliseconds::zero()};
+  return vault::Vault(std::move(password), disabled);
+}
+
+TEST_F(VaultSerializerTest, FirstSaveCreatesNoBackup) {
+  vault::Vault vault{SecureString{"hello"}};
+  vault.Init();
+
+  ASSERT_TRUE(vault::Serializator::serialize(SecureString{"master-password"},
+                                             path_.string(), vault));
+
+  EXPECT_FALSE(std::filesystem::exists(backup_path()));
+}
+
+TEST_F(VaultSerializerTest, OverwriteKeepsPreviousFileAsBackup) {
+  vault::Vault vault{SecureString{"hello"}};
+  vault.Init();
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"secret"}));
+
+  ASSERT_TRUE(vault::Serializator::serialize(SecureString{"master-password"},
+                                             path_.string(), vault));
+  const std::string first_bytes = read_file_bytes(path_);
+
+  ASSERT_TRUE(vault::Serializator::serialize(SecureString{"master-password"},
+                                             path_.string(), vault));
+
+  ASSERT_TRUE(std::filesystem::exists(backup_path()));
+  EXPECT_EQ(read_file_bytes(backup_path()), first_bytes);
+  EXPECT_NE(read_file_bytes(path_), first_bytes);
+}
+
+TEST_F(VaultSerializerTest, BackupHasOwnerOnlyPermissions) {
+  vault::Vault vault{SecureString{"hello"}};
+  vault.Init();
+
+  ASSERT_TRUE(vault::Serializator::serialize(SecureString{"master-password"},
+                                             path_.string(), vault));
+  ASSERT_TRUE(vault::Serializator::serialize(SecureString{"master-password"},
+                                             path_.string(), vault));
+
+  struct stat info {};
+  ASSERT_EQ(::stat(backup_path().c_str(), &info), 0);
+  EXPECT_EQ(static_cast<unsigned>(info.st_mode & 0777), 0600u);
+}
+
+TEST_F(VaultSerializerTest, BackupRecoversStructurallyCorruptMainFile) {
+  vault::Vault first{SecureString{"hello"}};
+  first.Init();
+  ASSERT_TRUE(first.Add("One", "alice", SecureString{"first-secret"}));
+  ASSERT_TRUE(vault::Serializator::serialize(SecureString{"master-password"},
+                                             path_.string(), first));
+
+  vault::Vault second{SecureString{"hello"}};
+  second.Init();
+  ASSERT_TRUE(second.Add("Two", "bob", SecureString{"second-secret"}));
+  ASSERT_TRUE(vault::Serializator::serialize(SecureString{"master-password"},
+                                             path_.string(), second));
+  ASSERT_TRUE(std::filesystem::exists(backup_path()));
+
+  // Simulate the main file being damaged while the backup stays intact.
+  {
+    std::ofstream corrupt(path_, std::ios::binary | std::ios::trunc);
+    corrupt << "not a vault";
+  }
+
+  auto restored = vault_with_throttle_disabled(SecureString{"unused"});
+  const auto result = vault::service::load(SecureString{"master-password"},
+                                           path_.string(), restored);
+
+  ASSERT_TRUE(result.has_value());
+  ASSERT_EQ(restored.Entries().size(), 1u);
+  EXPECT_EQ(restored.Entries()[0].title, "One");
+  // Recovery must keep saving to the real path, not the backup file.
+  EXPECT_EQ(restored.path(), path_.string());
+}
+
+TEST_F(VaultSerializerTest, WrongPasswordNeverFallsBackToBackup) {
+  vault::Vault original{SecureString{"hello"}};
+  original.Init();
+  ASSERT_TRUE(original.Add("GitHub", "alice", SecureString{"secret"}));
+
+  ASSERT_TRUE(vault::Serializator::serialize(SecureString{"master-password"},
+                                             path_.string(), original));
+  ASSERT_TRUE(vault::Serializator::serialize(SecureString{"master-password"},
+                                             path_.string(), original));
+  ASSERT_TRUE(std::filesystem::exists(backup_path()));
+
+  auto restored = vault_with_throttle_disabled(SecureString{"unused"});
+  const auto result = vault::service::load(SecureString{"wrong-password"},
+                                           path_.string(), restored);
+
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), vault::VaultError::CryptoError);
+  EXPECT_TRUE(restored.Entries().empty());
+}
+
+TEST_F(VaultSerializerTest, LoadPathRecordsThrottleFailuresAndResets) {
+  vault::Vault original{SecureString{"hello"}};
+  original.Init();
+  ASSERT_TRUE(original.Add("GitHub", "alice", SecureString{"secret"}));
+  ASSERT_TRUE(vault::Serializator::serialize(SecureString{"master-password"},
+                                             path_.string(), original));
+
+  auto target = vault_with_throttle_disabled(SecureString{"unused"});
+
+  const auto first = vault::service::load(SecureString{"wrong-password"},
+                                          path_.string(), target);
+  ASSERT_FALSE(first.has_value());
+  EXPECT_EQ(target.failed_unlock_attempts(), 1u);
+
+  const auto second = vault::service::load(SecureString{"wrong-password"},
+                                           path_.string(), target);
+  ASSERT_FALSE(second.has_value());
+  EXPECT_EQ(target.failed_unlock_attempts(), 2u);
+
+  const auto good = vault::service::load(SecureString{"master-password"},
+                                         path_.string(), target);
+  ASSERT_TRUE(good.has_value());
+  EXPECT_EQ(target.failed_unlock_attempts(), 0u);
+}
+
+TEST_F(VaultSerializerTest, LoadIgnoresLeftoverTempFileAfterCrash) {
+  vault::Vault original{SecureString{"hello"}};
+  original.Init();
+  ASSERT_TRUE(original.Add("GitHub", "alice", SecureString{"secret"}));
+  ASSERT_TRUE(vault::Serializator::serialize(SecureString{"master-password"},
+                                             path_.string(), original));
+
+  // The writer finishes by renaming its temp file into place; a crash can leave
+  // one behind, which must not affect a later load of the intact target.
+  const auto leftover =
+      path_.string() + ".tmp." + std::to_string(getpid()) + ".ABCDEF";
+  { std::ofstream tmp(leftover, std::ios::binary); tmp << "half-written"; }
+
+  vault::Vault restored{SecureString{"unused"}};
+  const auto result = vault::service::load(SecureString{"master-password"},
+                                           path_.string(), restored);
+  EXPECT_TRUE(result.has_value());
+
+  std::error_code ec;
+  std::filesystem::remove(leftover, ec);
+}
+
 } // namespace

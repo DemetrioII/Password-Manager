@@ -216,7 +216,9 @@ vault::Vault::UnlockAndReload(SecureString &&password) {
   // password is only consumed here, after the fast check above.
   const bool was_locked = locked_;
   locked_ = false;
-  auto result = Serializator::deserialize(std::move(password), path_, *this);
+  auto result =
+      Serializator::deserialize(std::move(password), path_, *this,
+                                /*password_already_verified=*/true);
   if (!result) {
     locked_ = was_locked;
     if (was_locked)
@@ -270,15 +272,15 @@ vault::Vault::SetPassword(SecureString &&old, SecureString &&new_pw,
                           const std::string &path) {
   if (auto ready = ensureUnlocked(); !ready)
     return std::unexpected(ready.error());
-  try {
-    auto candidate = EphemeralKey(old, get<Argon2Salt>(ephemeral_salt_), kdf_);
-    if (test_magic_ciphertext.decrypt(candidate) != test_magic_plaintext)
-      return std::unexpected(VaultError::WrongPassword);
-  } catch (const CryptoError &) {
+
+  // Same constant-time check and throttle recording as a regular unlock. The
+  // returned key is the current session key, so the old password is not
+  // derived a second time for re-encryption below.
+  auto candidate = deriveAndVerify(old);
+  if (!candidate)
+    return std::unexpected(candidate.error());
+  if (!*candidate)
     return std::unexpected(VaultError::WrongPassword);
-  } catch (const std::exception &) {
-    return std::unexpected(VaultError::OutOfMemory);
-  }
 
   const auto old_entries = entries_;
   const auto old_meta = meta_salt_;
@@ -286,12 +288,7 @@ vault::Vault::SetPassword(SecureString &&old, SecureString &&new_pw,
   const auto old_ephemeral = ephemeral_salt_;
   const auto old_kdf = kdf_;
 
-  std::optional<EphemeralKey> old_session_key;
-  try {
-    old_session_key.emplace(old, get<Argon2Salt>(old_ephemeral), old_kdf);
-  } catch (const std::exception &) {
-    return std::unexpected(VaultError::OutOfMemory);
-  }
+  std::optional<EphemeralKey> old_session_key{std::move(**candidate)};
 
   auto meta_salt_new = SaltManager::generateSalt<Argon2Salt>();
   auto master_salt_new = SaltManager::generateSalt<Argon2Salt>();
@@ -338,14 +335,9 @@ vault::Vault::SetPassword(SecureString &&old, SecureString &&new_pw,
     master_salt_ = old_master;
     ephemeral_salt_ = old_ephemeral;
     kdf_ = old_kdf;
-    try {
-      session_key_.emplace(old, get<Argon2Salt>(old_ephemeral), old_kdf);
-    } catch (const std::exception &) {
-      session_key_.reset();
-      init_error_ = VaultError::OutOfMemory;
-      locked_ = true;
-      return std::unexpected(VaultError::OutOfMemory);
-    }
+    // Reuse the key that was already verified instead of paying for another
+    // Argon2 pass on the rollback path.
+    session_key_ = std::move(*old_session_key);
     entries_ = old_entries;
     test_magic_ciphertext =
         EncryptedField::encrypt(test_magic_plaintext, *session_key_);

@@ -14,9 +14,21 @@ public:
   [[nodiscard]]
   static std::expected<void, vault::VaultError>
   serialize(SecureString &&, const std::string &file_path, vault::Vault &vault);
+
+  // Loads a vault from `path`. When the main file is structurally invalid the
+  // loader tries `<path>.bak` (the pre-replace copy kept by SafeFileWriter).
+  // `password_already_verified` is set by UnlockAndReload, whose caller has
+  // just validated the password; it suppresses a second throttle record.
   [[nodiscard]]
   static std::expected<void, vault::VaultError>
-  deserialize(SecureString &&, const std::string &path, vault::Vault &vault);
+  deserialize(SecureString &&, const std::string &path, vault::Vault &vault,
+              bool password_already_verified = false);
+
+private:
+  [[nodiscard]]
+  static std::expected<void, vault::VaultError>
+  deserialize_from(const SecureString &password, const std::string &path,
+                   vault::Vault &vault, bool record_throttle);
 };
 
 class service {

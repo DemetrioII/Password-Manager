@@ -20,6 +20,10 @@ public:
   void RecordSuccess();
   void RecordFailure();
 
+  // Consecutive failures since the last success. Exposed so the throttled load
+  // path can be asserted without depending on wall-clock sleeps.
+  [[nodiscard]] std::uint32_t failures() const noexcept { return failures_; }
+
 private:
   static void default_sleeper(std::chrono::milliseconds ms);
 

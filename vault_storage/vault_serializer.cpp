@@ -1,6 +1,8 @@
 #include "vault_storage/vault_serializer.h"
 
 #include <cstring>
+#include <filesystem>
+#include <sodium.h>
 #include <unordered_set>
 
 namespace {
@@ -43,6 +45,24 @@ Nonce nonce_from_bytes(const std::string &bytes, bool is_xchacha) {
       nonce);
   return nonce;
 }
+
+// Zeroes a heap buffer of decrypted vault contents on every exit path,
+// including the validation failures that happen after decryption. Declared
+// after the string it guards at the call site, so it runs first.
+class ZeroizeOnExit {
+public:
+  explicit ZeroizeOnExit(std::string &buffer) noexcept : buffer_(buffer) {}
+  ~ZeroizeOnExit() {
+    if (!buffer_.empty())
+      sodium_memzero(buffer_.data(), buffer_.size());
+  }
+
+  ZeroizeOnExit(const ZeroizeOnExit &) = delete;
+  ZeroizeOnExit &operator=(const ZeroizeOnExit &) = delete;
+
+private:
+  std::string &buffer_;
+};
 
 } // namespace
 
@@ -95,7 +115,7 @@ vault::Serializator::serialize(SecureString &&password,
 
   vault::VaultKeys keys;
   try {
-    keys = vault::derive_keys_from_password(std::move(password), vault.meta_salt_,
+    keys = vault::derive_keys_from_password(password, vault.meta_salt_,
                                             vault.master_salt_, vault.kdf_);
   } catch (const KDFError &) {
     return std::unexpected(vault::VaultError::OutOfMemory);
@@ -185,10 +205,44 @@ vault::Serializator::serialize(SecureString &&password,
 
 std::expected<void, vault::VaultError>
 vault::Serializator::deserialize(SecureString &&password,
-                                 const std::string &path, vault::Vault &vault) {
+                                 const std::string &path, vault::Vault &vault,
+                                 bool password_already_verified) {
   if (vault.locked_)
     return std::unexpected(vault::VaultError::VaultLocked);
 
+  const bool record_throttle = !password_already_verified;
+  auto result = deserialize_from(password, path, vault, record_throttle);
+  if (result)
+    return {};
+
+  // A CryptoError means the password itself was rejected (or the ciphertext
+  // was tampered with); retrying the backup would repeat the Argon2 work and
+  // hide the real failure. OutOfMemory is not something a backup can fix.
+  if (result.error() == vault::VaultError::CryptoError ||
+      result.error() == vault::VaultError::OutOfMemory)
+    return result;
+
+  const std::string backup_path =
+      path + std::string(vault::kVaultBackupSuffix);
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(backup_path, ec))
+    return result;
+
+  auto recovered =
+      deserialize_from(password, backup_path, vault, record_throttle);
+  if (!recovered)
+    return result; // Report the main file's failure, not the backup's.
+
+  // The bytes came from the backup, but future saves belong to the real path.
+  vault.path_ = path;
+  return {};
+}
+
+std::expected<void, vault::VaultError>
+vault::Serializator::deserialize_from(const SecureString &password,
+                                      const std::string &path,
+                                      vault::Vault &vault,
+                                      bool record_throttle) {
   password_manager::VaultProto proto;
   password_manager::EncryptedEntries entries;
   std::ifstream file(path, std::ios::binary);
@@ -334,7 +388,7 @@ vault::Serializator::deserialize(SecureString &&password,
 
   vault::VaultKeys keys;
   try {
-    keys = vault::derive_keys_from_password(std::move(password), meta_salt,
+    keys = vault::derive_keys_from_password(password, meta_salt,
                                             master_salt, kdf);
   } catch (const KDFError &) {
     return std::unexpected(vault::VaultError::OutOfMemory);
@@ -349,6 +403,7 @@ vault::Serializator::deserialize(SecureString &&password,
       vault::make_header(meta_salt, master_salt, ephemeral_salt, nonce);
 
   std::string decrypted;
+  const ZeroizeOnExit zeroize_decrypted{decrypted};
 
   try {
     if (version == 0) {
@@ -363,6 +418,10 @@ vault::Serializator::deserialize(SecureString &&password,
                                          aad.size(), nonce, keys.meta_key);
     }
   } catch (const CryptoError &) {
+    // The password was rejected (or the blob was tampered with): this is the
+    // load-path attempt the throttle has to see.
+    if (record_throttle)
+      vault.throttle_.RecordFailure();
     return std::unexpected(VaultError::CryptoError);
   }
 
@@ -377,8 +436,7 @@ vault::Serializator::deserialize(SecureString &&password,
 
   std::optional<EphemeralKey> new_session_key;
   try {
-    new_session_key.emplace(std::move(password),
-                            get<Argon2Salt>(ephemeral_salt), kdf);
+    new_session_key.emplace(password, get<Argon2Salt>(ephemeral_salt), kdf);
   } catch (const std::exception &) {
     return std::unexpected(vault::VaultError::OutOfMemory);
   }
@@ -440,6 +498,9 @@ vault::Serializator::deserialize(SecureString &&password,
   vault.path_ = path;
   vault.init_error_.reset();
   vault.locked_ = false;
+
+  if (record_throttle)
+    vault.throttle_.RecordSuccess();
 
   return {};
 }

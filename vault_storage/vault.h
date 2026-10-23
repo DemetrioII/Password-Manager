@@ -49,6 +49,12 @@ public:
 
   bool locked() const noexcept { return locked_; }
 
+  // Consecutive failed password checks (unlock or load) since the last
+  // success. Exposed so the throttled load path can be tested deterministically.
+  [[nodiscard]] std::uint32_t failed_unlock_attempts() const noexcept {
+    return throttle_.failures();
+  }
+
   // AEAD used when this vault is written. Set before the first save to pick
   // the cipher; deserialize() sets it from the file so a re-save preserves
   // whatever cipher the vault was loaded with.

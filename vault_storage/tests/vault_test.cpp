@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <utility>
 
@@ -533,6 +534,8 @@ TEST_F(VaultTest, SetPasswordRejectsWrongOldPassword) {
   auto res = vault.SetPassword(SecureString{"wrong"}, SecureString{"new"}, path);
   ASSERT_FALSE(res.has_value());
   EXPECT_EQ(res.error(), vault::VaultError::WrongPassword);
+  // The old-password check must go through the same throttle as Unlock().
+  EXPECT_EQ(vault.failed_unlock_attempts(), 1u);
 }
 
 TEST_F(VaultTest, SetPasswordWorksAndChangesPassword) {
@@ -609,6 +612,33 @@ TEST_F(VaultTest, UnlockAndReloadWrongPasswordKeepsVaultLocked) {
   ASSERT_TRUE(good.has_value());
   ASSERT_EQ(vault.Entries().size(), 1u);
   EXPECT_EQ(vault.Entries()[0].title, "GitHub");
+}
+
+TEST_F(VaultTest, UnlockAndReloadDoesNotDoubleCountThrottle) {
+  auto vault = VaultWithThrottlingDisabled(SecureString{"master-password"});
+  vault.Init();
+  ASSERT_TRUE(vault.Add("GitHub", "alice", SecureString{"super-secret"}));
+
+  const auto path =
+      std::filesystem::temp_directory_path() / "reload_corrupt.vault";
+  ASSERT_TRUE(vault::service::save(SecureString{"master-password"},
+                                   path.string(), vault)
+                  .has_value());
+
+  {
+    std::ofstream corrupt(path, std::ios::binary | std::ios::trunc);
+    corrupt << "not a vault";
+  }
+  vault.Lock();
+
+  auto result = vault.UnlockAndReload(SecureString{"master-password"});
+  ASSERT_FALSE(result.has_value());
+  // The password was verified before the reload, so the failed parse must not
+  // be charged as a wrong-password attempt.
+  EXPECT_EQ(vault.failed_unlock_attempts(), 0u);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
 }
 
 TEST_F(VaultTest, UnlockAndReloadWithoutPathFallsBackToFastUnlock) {

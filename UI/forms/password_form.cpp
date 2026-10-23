@@ -1,6 +1,6 @@
 #include "UI/forms/password_form.hpp"
+#include "UI/forms/secure_input.hpp"
 #include "password_generator/pass_gen.h"
-#include <QByteArray>
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QGridLayout>
@@ -8,18 +8,8 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QVBoxLayout>
-#include <sodium.h>
-#include <string_view>
 
 namespace {
-
-SecureString toSecureString(const QString &text) {
-  QByteArray utf8 = text.toUtf8();
-  SecureString secure{std::string_view{
-      utf8.constData(), static_cast<std::size_t>(utf8.size())}};
-  sodium_memzero(utf8.data(), static_cast<std::size_t>(utf8.size()));
-  return secure;
-}
 
 QString describePasswordError(PasswordError error) {
   switch (error) {

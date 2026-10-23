@@ -3,6 +3,7 @@
 #include "UI/forms/load_form.hpp"
 #include "UI/forms/lock_form.hpp"
 #include "UI/forms/password_form.hpp"
+#include "UI/forms/secure_input.hpp"
 #include "UI/forms/save_form.hpp"
 #include <QStatusBar>
 #include <algorithm>
@@ -314,7 +315,7 @@ MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
 
     if (form.exec() == QDialog::Accepted) {
       std::string name = form.getName().toStdString();
-      SecureString password{form.getPassword().toStdString()};
+      SecureString password = toSecureString(form.getPassword());
       form.clearSensitiveFields();
 
       const auto saved = vault::service::save(std::move(password), name, vault_);
@@ -335,7 +336,7 @@ MainWindow::MainWindow(vault::Vault &&vault, QWidget *parent)
     }
 
     std::string name = form.getName().toStdString();
-    SecureString password{form.getPassword().toStdString()};
+    SecureString password = toSecureString(form.getPassword());
     form.clearSensitiveFields();
 
     const auto loaded = vault::service::load(std::move(password), name, vault_);

@@ -1,22 +1,8 @@
 #include "UI/forms/master_form.hpp"
 #include "UI/forms/cipher_names.hpp"
-#include <QByteArray>
+#include "UI/forms/secure_input.hpp"
 #include <QMessageBox>
 #include <QShowEvent>
-#include <sodium.h>
-#include <string_view>
-
-namespace {
-
-SecureString toSecureString(const QString &text) {
-  QByteArray utf8 = text.toUtf8();
-  SecureString secure{std::string_view{
-      utf8.constData(), static_cast<std::size_t>(utf8.size())}};
-  sodium_memzero(utf8.data(), static_cast<std::size_t>(utf8.size()));
-  return secure;
-}
-
-} // namespace
 
 MasterForm::MasterForm(QWidget *parent) : QDialog(parent) {
   setWindowTitle("Create master password");

@@ -13,6 +13,10 @@ A password manager written in **modern C++** with a strong focus on security, cr
 >
 > This project is under active development and has **not been independently audited**. Do not use it as the only storage for real passwords or other critical secrets.
 
+<p align="center">
+  <img src="Screenshot1.png" alt="Password Manager main window" width="904">
+</p>
+
 ## ✨ Features
 
 * 🔒 **Encrypted password vault** with an explicit lock / unlock workflow

@@ -1,0 +1,31 @@
+.git
+.github
+.opencode
+.cache
+bazel-*
+compile_commands.json
+aquery.json
+aquery.txt
+cpp.txt
+own.txt
+tags
+*.bin
+*.nonce
+salt.bin
+/vault
+.env*
+
+# Keep the container build independent of host-specific Bazel configuration.
+.bazelrc
+.bazeliskrc
+.bazelversion
+MODULE.bazel.lock
+generate_compile_commands.sh
+generate_json.py
+
+# Documentation is not needed to compile the application.
+AGENTS.md
+PLAN.md
+README.md
+SECURITY.md
+CONTRIBUTING.md

@@ -18,8 +18,7 @@ vault::Vault::Vault(SecureString &&password,
     : ephemeral_salt_(SaltManager::generateSalt<Argon2Salt>()),
       throttle_(throttle_config) {
   try {
-    session_key_.emplace(std::move(password),
-                         get<Argon2Salt>(ephemeral_salt_));
+    session_key_.emplace(std::move(password), get<Argon2Salt>(ephemeral_salt_));
     test_magic_ciphertext =
         EncryptedField::encrypt(test_magic_plaintext, *session_key_);
   } catch (const std::exception &) {
@@ -28,14 +27,15 @@ vault::Vault::Vault(SecureString &&password,
   }
 }
 
-std::expected<void, vault::VaultError>
-vault::Vault::ensureUnlocked() const {
+std::expected<void, vault::VaultError> vault::Vault::ensureUnlocked() const {
   if (init_error_)
     return std::unexpected(*init_error_);
   if (locked_)
     return std::unexpected(VaultError::VaultLocked);
   return {};
 }
+
+bool vault::Vault::hasPath() const noexcept { return !path_.empty(); }
 
 std::expected<void, vault::VaultError>
 vault::Vault::Add(PasswordEntry &&entry) {
@@ -161,8 +161,7 @@ vault::Vault::deriveAndVerify(const SecureString &password) {
 
   bool matches = false;
   try {
-    matches =
-        test_magic_ciphertext.decrypt(*candidate) == test_magic_plaintext;
+    matches = test_magic_ciphertext.decrypt(*candidate) == test_magic_plaintext;
   } catch (const CryptoError &) {
     matches = false;
   }
@@ -205,7 +204,7 @@ vault::Vault::UnlockAndReload(SecureString &&password) {
 
   // No backing file yet: we cannot recover wiped metadata, so keep the old
   // fast in-memory semantics.
-  if (path_.empty()) {
+  if (!hasPath()) {
     session_key_ = std::move(**candidate);
     locked_ = false;
     return {};
@@ -216,9 +215,8 @@ vault::Vault::UnlockAndReload(SecureString &&password) {
   // password is only consumed here, after the fast check above.
   const bool was_locked = locked_;
   locked_ = false;
-  auto result =
-      Serializator::deserialize(std::move(password), path_, *this,
-                                /*password_already_verified=*/true);
+  auto result = Serializator::deserialize(std::move(password), path_, *this,
+                                          /*password_already_verified=*/true);
   if (!result) {
     locked_ = was_locked;
     if (was_locked)
@@ -233,8 +231,9 @@ vault::Vault::Update(const UUID &id, const std::string &title,
                      const std::string &login, const SecureString &password) {
   if (auto ready = ensureUnlocked(); !ready)
     return std::unexpected(ready.error());
-  auto it = std::find_if(entries_.begin(), entries_.end(),
-                         [&](const PasswordEntry &entry) { return entry.id == id; });
+  auto it =
+      std::find_if(entries_.begin(), entries_.end(),
+                   [&](const PasswordEntry &entry) { return entry.id == id; });
   if (it == entries_.end())
     return std::unexpected(VaultError::EntryNotFound);
   if (title.size() > MAX_TITLE_SIZE || login.size() > MAX_LOGIN_SIZE)
@@ -257,8 +256,9 @@ std::expected<void, vault::VaultError>
 vault::Vault::SetNotes(const UUID &id, const std::string &notes) {
   if (auto ready = ensureUnlocked(); !ready)
     return std::unexpected(ready.error());
-  auto it = std::find_if(entries_.begin(), entries_.end(),
-                         [&](const PasswordEntry &entry) { return entry.id == id; });
+  auto it =
+      std::find_if(entries_.begin(), entries_.end(),
+                   [&](const PasswordEntry &entry) { return entry.id == id; });
   if (it == entries_.end())
     return std::unexpected(VaultError::EntryNotFound);
   if (notes.size() > MAX_NOTES_SIZE)

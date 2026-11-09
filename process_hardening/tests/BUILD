@@ -11,3 +11,15 @@ cc_test(
         "-std=c++23",
     ],
 )
+
+cc_test(
+    name = "process_hardening_container_test",
+    srcs = ["process_hardening_container_test.cpp"],
+    deps = [
+        "//process_hardening:process_hardening_container",
+        "@googletest//:gtest_main",
+    ],
+    copts = [
+        "-std=c++23",
+    ],
+)

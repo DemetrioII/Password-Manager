@@ -11,3 +11,16 @@ cc_library(
         "//visibility:public",
     ],
 )
+
+cc_library(
+    name = "process_hardening_container",
+    srcs = ["process_hardening.cpp"],
+    hdrs = ["process_hardening.h"],
+    copts = [
+        "-std=c++23",
+        "-DPM_CONTAINER_BUILD",
+    ],
+    visibility = [
+        "//visibility:public",
+    ],
+)

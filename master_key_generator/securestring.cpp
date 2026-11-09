@@ -1,4 +1,5 @@
 #include "master_key_generator/securestring.h"
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <stdexcept>
@@ -55,8 +56,22 @@ void SecureString::assign(const char *data, std::size_t size) {
 void SecureString::make_readonly() noexcept {
   if (data_ == nullptr)
     return;
-  if (sodium_mprotect_readonly(data_) != 0)
+  if (sodium_mprotect_readonly(data_) != 0) {
+#ifdef PM_CONTAINER_BUILD
+    // Container builds cannot rely on mprotect succeeding under the default
+    // seccomp/daemon configuration; degrade to a writable buffer but warn once.
+    static bool warned = false;
+    if (!warned) {
+      warned = true;
+      std::fprintf(stderr,
+                   "Warning: SecureString: mprotect(PROT_READ) failed; buffer "
+                   "remains writable.\n");
+    }
+    return;
+#else
     std::terminate();
+#endif
+  }
 }
 
 void SecureString::make_writable() {

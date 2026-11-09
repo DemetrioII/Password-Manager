@@ -50,7 +50,8 @@ public:
   bool locked() const noexcept { return locked_; }
 
   // Consecutive failed password checks (unlock or load) since the last
-  // success. Exposed so the throttled load path can be tested deterministically.
+  // success. Exposed so the throttled load path can be tested
+  // deterministically.
   [[nodiscard]] std::uint32_t failed_unlock_attempts() const noexcept {
     return throttle_.failures();
   }
@@ -66,18 +67,23 @@ public:
 
   Vault(Vault &&other) noexcept = default;
 
+  [[nodiscard]] bool hasPath() const noexcept;
 
   std::expected<void, VaultError> Update(const UUID &id,
-                                       const std::string &title,
-                                       const std::string &login,
-                                       const SecureString &password);
+                                         const std::string &title,
+                                         const std::string &login,
+                                         const SecureString &password);
 
   std::expected<void, VaultError> SetNotes(const UUID &id,
-                                          const std::string &notes);
+                                           const std::string &notes);
 
   std::expected<void, VaultError> SetPassword(SecureString &&old,
-                                            SecureString &&new_pw,
-                                            const std::string &path);
+                                              SecureString &&new_pw,
+                                              const std::string &path);
+
+  std::expected<void, VaultError> ChangeCipher(CipherAlgorithm new_cipher,
+                                               SecureString &&password,
+                                               const std::string &path);
 
 private:
   // Verifies `password` against `test_magic_ciphertext` in constant time and

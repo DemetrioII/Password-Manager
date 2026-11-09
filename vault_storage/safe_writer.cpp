@@ -65,8 +65,8 @@ SafeFileWriter::WriteAtomic(const std::filesystem::path &target_path,
                             const std::vector<unsigned char> &data) {
   // mkstemp creates the file with 0600 permissions regardless of umask and
   // fails if the name already exists, avoiding temp-file collisions.
-  std::string pattern = target_path.string() + ".tmp." +
-                        std::to_string(getpid()) + ".XXXXXX";
+  std::string pattern =
+      target_path.string() + ".tmp." + std::to_string(getpid()) + ".XXXXXX";
   std::vector<char> templ(pattern.begin(), pattern.end());
   templ.push_back('\0');
 
@@ -133,7 +133,10 @@ void SafeFileWriter::sync_directory(const std::filesystem::path &dir_path) {
   const auto path_to_open = dir_path.empty() ? "." : dir_path;
   const int dir_fd = ::open(path_to_open.c_str(), O_RDONLY | O_DIRECTORY);
   if (dir_fd != -1) {
-    ::fsync(dir_fd);
+    const int res = ::fsync(dir_fd);
+    if (res == -1) {
+      perror("Error during fsync directory");
+    }
     ::close(dir_fd);
   }
 }

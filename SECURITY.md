@@ -66,9 +66,12 @@ Use GitHub private vulnerability reporting / Security Advisory:
   credentials.
 - The application calls `hardening::apply()` at startup, which sets
   `RLIMIT_CORE = 0`, `PR_SET_DUMPABLE = 0`, and
-  `mlockall(MCL_CURRENT | MCL_FUTURE)`. These calls may fail in containers or
-  environments with a low `RLIMIT_MEMLOCK`, and the application then refuses to
-  start.
+  `mlockall(MCL_CURRENT | MCL_FUTURE)`. Native builds fail closed if any of
+  these calls fail. The container image is built with `PM_CONTAINER_BUILD`:
+  the first two remain fail-closed, while `mlockall` is best-effort (falling
+  back to `MCL_CURRENT`) because Docker's default `RLIMIT_MEMLOCK` is usually
+  too small. Run the container with `--ulimit memlock=-1` for full memory
+  locking.
 - Argon2id derivation is deliberately expensive and currently blocks the UI
   event loop. Expect freezes during create, unlock, load, save, and rekey
   operations.
@@ -182,17 +185,20 @@ Use GitHub private vulnerability reporting / Security Advisory:
 - **Filesystem checks:** the writer relies on `mkstemp` and `chmod(0600)`. There
   is **no explicit `O_NOFOLLOW` or `fstat` owner check** on the target path;
   symlink/TOCTOU behaviour is therefore in scope for testing.
-- **Secure memory:** `SecureString` uses `sodium_malloc` (mlock + guard pages),
-  is read-only at rest, and wipes with `sodium_memzero`; `Key` and `EphemeralKey`
-  use `sodium_mlock`/`sodium_memzero` and are non-copyable. Comparisons use
-  constant-time `sodium_memcmp`.
+- **Secure memory:** `SecureString` uses `sodium_malloc` (guard pages; its
+  `mlock` is best-effort, as libsodium documents), is read-only at rest, and
+  wipes with `sodium_memzero`; `Key` and `EphemeralKey` use
+  `sodium_mlock`/`sodium_memzero`, are non-copyable, and fail closed on locking
+  errors. Comparisons use constant-time `sodium_memcmp`.
 - **Plaintext zeroization:** the decrypted inner protobuf buffer in `deserialize`
   is guarded by `ZeroizeOnExit`; per-entry plaintext is held in `SecureString`.
   Review remaining plaintext `std::string` buffers (for example the serialized
   entries buffer in `serialize`) as part of a memory-lifetime audit.
 - **Process hardening:** `hardening::apply()` sets `RLIMIT_CORE = 0`,
-  `PR_SET_DUMPABLE = 0`, and `mlockall(MCL_CURRENT | MCL_FUTURE)`, failing closed
-  before the UI starts.
+  `PR_SET_DUMPABLE = 0`, and `mlockall(MCL_CURRENT | MCL_FUTURE)` before the UI
+  starts. Native builds fail closed on any error; the container build keeps the
+  first two fail-closed and treats `mlockall` as best-effort (warning + fallback
+  to `MCL_CURRENT`).
 - **Non-throwing vault API:** public `Vault` operations return `std::expected`
   and `VaultError`; crypto helpers throw internally and are caught at the vault
   boundary.

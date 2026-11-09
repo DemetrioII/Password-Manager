@@ -25,8 +25,8 @@ A password manager written in **modern C++** with a strong focus on security, cr
 * ♻️ **Rekeying** — change the master password and re-encrypt every entry (`Vault::SetPassword`)
 * ✏️ **Entry mutation** — update an entry while preserving its UUID, and set notes
 * 📏 **Consistent size limits** between writing and reading, so a saved vault is always re-loadable
-* 🧹 **Secure memory handling** — `mlock`, guard pages, read-only-at-rest secrets, `sodium_memzero` wipes
-* 🛡️ **Process hardening** — core dumps disabled, process made non-dumpable, whole address space locked into RAM
+* 🧹 **Secure memory handling** — `Key`/`EphemeralKey` enforce `mlock`; `SecureString` uses guard pages and best-effort locking; secrets are wiped with `sodium_memzero`
+* 🛡️ **Process hardening** — core dumps disabled, process made non-dumpable, and the address space locked into RAM where the platform permits it
 * 🚦 **Non-throwing public API** — recoverable errors use `std::expected` and `VaultError`, never exceptions
 * ⏱️ **Unlock throttling** — exponential backoff on failed unlock attempts
 * 🧱 **Atomic file writes** (`mkstemp` → `fsync` → `rename` → directory `fsync`), owner-only permissions
@@ -196,8 +196,8 @@ Version, KDF parameters and algorithm ids are packed together with the salts and
 
 Security is treated as a whole-system property, not just a crypto problem:
 
-* 🔒 **Secure memory** — `Key` and `SecureString` types are non-copyable, locked with `mlock`, and wiped with `sodium_memzero`; `SecureString` sits on guard pages and is read-only at rest.
-* 🚫 **Process hardening** — applied first thing at startup: `RLIMIT_CORE = 0`, `PR_SET_DUMPABLE = 0`, `mlockall(MCL_CURRENT | MCL_FUTURE)`, all fail-closed.
+* 🔒 **Secure memory** — `Key` and `EphemeralKey` are non-copyable, fail-closed on `sodium_mlock`, and wiped with `sodium_memzero`; `SecureString` is non-copyable, uses `sodium_malloc` guard pages, is read-only at rest, and wipes with `sodium_memzero`. Its `mlock` is best-effort, as libsodium documents.
+* 🚫 **Process hardening** — `RLIMIT_CORE = 0` and `PR_SET_DUMPABLE = 0` are always fail-closed; `mlockall(MCL_CURRENT | MCL_FUTURE)` is fail-closed in native builds and best-effort in the container build (fallback to `MCL_CURRENT`, with a warning). Pass `--ulimit memlock=-1` to the container for full locking.
 * ⏱️ **Unlock throttling** — exponential backoff (capped) on repeated failures, with no success-leaking fast path.
 * 🧾 **Atomic writes** — temp file created with `mkstemp` (owner-only), fully written, `fsync`-ed, then atomically renamed, followed by a directory `fsync`.
 * 🧯 **Defensive parsing** — field sizes, salt/nonce sizes, entry count and total file size are validated before use; unsupported inputs are rejected early.
@@ -313,6 +313,52 @@ To run a single target:
 ```bash
 bazelisk test //vault_storage/tests:vault_test
 ```
+
+## 🐳 Docker
+
+A multi-stage `Dockerfile` builds the Qt application in Ubuntu 24.04 and copies only the release binary into a smaller runtime image. The image runs as the non-root `app` user (UID 10001) and exposes `/data` as a volume.
+
+**Requirements**
+
+* Docker with BuildKit (the Dockerfile uses cache mounts)
+* An X11 session; the container uses the host display
+* `xhost` (package `x11-xserver-utils`)
+
+Allow local Docker containers to connect to the host X server, then build:
+
+```bash
+xhost +local:docker
+docker build -t libre-passman .
+```
+
+Run the GUI:
+
+```bash
+docker run -it --rm \
+  --ulimit memlock=-1:-1 \
+  -e DISPLAY="$DISPLAY" \
+  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  libre-passman:latest
+```
+
+Revoke the X11 access when you are done:
+
+```bash
+xhost -local:docker
+```
+
+`--ulimit memlock=-1:-1` gives the app enough locked memory, so it can lock its whole address space as in a native build. The image is compiled with the container hardening profile (`PM_CONTAINER_BUILD`): core dumps and `ptrace` are still blocked, but `mlockall()` is best-effort because Docker's default `RLIMIT_MEMLOCK` is usually too small. Without the ulimit the app still starts, but prints a warning and secrets may be swappable, so disable or encrypt swap. If your Docker daemon refuses to raise the limit, you can run as root with `--user 0 --cap-add=IPC_LOCK` (less isolated).
+
+The container has an anonymous volume at `/data`. To keep vault files on the host, add `-v "$PWD:/data"`; if you do, you may also need `--user "$(id -u):$(id -g)"` or `chown` the directory so the container can write to it.
+
+The published image lives in the GitHub Container Registry. The workflow in `.github/workflows/docker.yml` builds and pushes on every push to `main`, on `v*.*.*` tags, and manually via `workflow_dispatch`; pull requests only build.
+
+```bash
+docker pull ghcr.io/demetrioii/password-manager:latest
+docker tag ghcr.io/demetrioii/password-manager:latest libre-passman:latest
+```
+
+The package is private by default; change its visibility in the repository's package settings if you want anonymous pulls. For Wayland, mount `$XDG_RUNTIME_DIR` and set `QT_QPA_PLATFORM=wayland`; for a headless check, set `QT_QPA_PLATFORM=offscreen`.
 
 ## 🗺️ Roadmap
 
